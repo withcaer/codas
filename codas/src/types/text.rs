@@ -182,11 +182,7 @@ fn try_decode_string(
     unsafe {
         // Truncate and pad the bytes to fit the new text.
         let bytes = string.as_mut_vec();
-        bytes.truncate(header.count as usize);
-        bytes.reserve(header.count as usize);
-        while bytes.len() < header.count as usize {
-            bytes.push(0u8);
-        }
+        bytes.resize(header.count as usize, 0);
 
         // Read in the raw bytes.
         if let Err(e) = reader.read_exact(bytes) {

@@ -459,10 +459,19 @@ impl Encodable for DataHeader {
         &self,
         writer: &mut (impl encode::WritesEncodable + ?Sized),
     ) -> Result<(), CodecError> {
-        writer.write_all(&self.count.to_le_bytes())?;
-        writer.write_all(&self.format.blob_size.to_le_bytes())?;
-        writer.write_all(&self.format.data_fields.to_le_bytes())?;
-        writer.write_all(&self.format.ordinal.to_le_bytes())?;
+        let count = self.count.to_le_bytes();
+        let blob = self.format.blob_size.to_le_bytes();
+        let buf = [
+            count[0],
+            count[1],
+            count[2],
+            count[3],
+            blob[0],
+            blob[1],
+            self.format.data_fields,
+            self.format.ordinal,
+        ];
+        writer.write_all(&buf)?;
         Ok(())
     }
 

@@ -134,9 +134,9 @@ impl Unspecified {
         match self {
             // We return these types manually to avoid an unnecessary
             // heap allocation when delegating to self.as_type().
-            Unspecified::Text(_) => 244,
-            Unspecified::List(_) => 243,
-            Unspecified::Map(_) => 242,
+            Unspecified::Text(_) => Type::TEXT_ORDINAL,
+            Unspecified::List(_) => Type::LIST_ORDINAL,
+            Unspecified::Map(_) => Type::MAP_ORDINAL,
             // Data preserves the original wire ordinal.
             Unspecified::Data { header, .. } => header.format.ordinal,
             // All other variants delegate to their Type's ordinal.
@@ -146,13 +146,7 @@ impl Unspecified {
 
     /// Returns the blob size for scalar types.
     fn scalar_blob_size(&self) -> u16 {
-        match self {
-            Unspecified::U8(_) | Unspecified::I8(_) | Unspecified::Bool(_) => 1,
-            Unspecified::U16(_) | Unspecified::I16(_) => 2,
-            Unspecified::U32(_) | Unspecified::I32(_) | Unspecified::F32(_) => 4,
-            Unspecified::U64(_) | Unspecified::I64(_) | Unspecified::F64(_) => 8,
-            _ => 0,
-        }
+        expected_scalar_blob_size(self.type_ordinal()).unwrap_or(0)
     }
 }
 
@@ -346,11 +340,11 @@ fn encode_unspecified_list(
 /// Returns the expected `blob_size` for a scalar ordinal,
 /// or `None` if the ordinal is not a scalar type.
 fn expected_scalar_blob_size(ordinal: u8) -> Option<u16> {
-    match Type::from_ordinal(ordinal)? {
-        Type::U8 | Type::I8 | Type::Bool => Some(1),
-        Type::U16 | Type::I16 => Some(2),
-        Type::U32 | Type::I32 | Type::F32 => Some(4),
-        Type::U64 | Type::I64 | Type::F64 => Some(8),
+    match ordinal {
+        Type::U8_ORDINAL | Type::I8_ORDINAL | Type::BOOL_ORDINAL => Some(1),
+        Type::U16_ORDINAL | Type::I16_ORDINAL => Some(2),
+        Type::U32_ORDINAL | Type::I32_ORDINAL | Type::F32_ORDINAL => Some(4),
+        Type::U64_ORDINAL | Type::I64_ORDINAL | Type::F64_ORDINAL => Some(8),
         _ => None,
     }
 }
@@ -394,23 +388,23 @@ fn decode_unspecified_list(
     // the Vec will grow naturally if count is larger.
     let mut items = Vec::with_capacity(count.min(1024));
 
-    match Type::from_ordinal(inner.format.ordinal) {
+    match inner.format.ordinal {
         // Ordinal 0 with no data fields: only valid as an empty list.
         // Non-zero counts are rejected to avoid materializing unbounded
         // typeless defaults from a single header.
-        Some(Type::Unspecified) if inner.format.data_fields == 0 && count > 0 => {
+        Type::UNSPECIFIED_ORDINAL if inner.format.data_fields == 0 && count > 0 => {
             return UnsupportedDataFormatSnafu {
                 ordinal: inner.format.ordinal,
             }
             .fail();
         }
-        Some(Type::Unspecified) if inner.format.data_fields == 0 => {}
+        Type::UNSPECIFIED_ORDINAL if inner.format.data_fields == 0 => {}
 
         // Structured ordinals (Text, List, Map) require at least one
         // data field when count > 0. Reject malformed headers like
         // ordinal=Text with data_fields=0 to avoid decoding
         // self-describing elements from blob-only payload.
-        Some(Type::Text | Type::List(_) | Type::Map(_))
+        Type::TEXT_ORDINAL | Type::LIST_ORDINAL | Type::MAP_ORDINAL
             if inner.format.data_fields == 0 && count > 0 =>
         {
             return UnsupportedDataFormatSnafu {
@@ -420,82 +414,34 @@ fn decode_unspecified_list(
         }
 
         // Homogeneous scalar types (blob, no per-element header).
-        Some(Type::U8) => {
-            for _ in 0..count {
-                let mut v = 0u8;
-                v.decode(reader, None)?;
-                items.push(Unspecified::U8(v));
-            }
+        Type::U8_ORDINAL => decode_scalars_into::<u8>(reader, &mut items, count, Unspecified::U8)?,
+        Type::U16_ORDINAL => {
+            decode_scalars_into::<u16>(reader, &mut items, count, Unspecified::U16)?
         }
-        Some(Type::U16) => {
-            for _ in 0..count {
-                let mut v = 0u16;
-                v.decode(reader, None)?;
-                items.push(Unspecified::U16(v));
-            }
+        Type::U32_ORDINAL => {
+            decode_scalars_into::<u32>(reader, &mut items, count, Unspecified::U32)?
         }
-        Some(Type::U32) => {
-            for _ in 0..count {
-                let mut v = 0u32;
-                v.decode(reader, None)?;
-                items.push(Unspecified::U32(v));
-            }
+        Type::U64_ORDINAL => {
+            decode_scalars_into::<u64>(reader, &mut items, count, Unspecified::U64)?
         }
-        Some(Type::U64) => {
-            for _ in 0..count {
-                let mut v = 0u64;
-                v.decode(reader, None)?;
-                items.push(Unspecified::U64(v));
-            }
+        Type::I8_ORDINAL => decode_scalars_into::<i8>(reader, &mut items, count, Unspecified::I8)?,
+        Type::I16_ORDINAL => {
+            decode_scalars_into::<i16>(reader, &mut items, count, Unspecified::I16)?
         }
-        Some(Type::I8) => {
-            for _ in 0..count {
-                let mut v = 0i8;
-                v.decode(reader, None)?;
-                items.push(Unspecified::I8(v));
-            }
+        Type::I32_ORDINAL => {
+            decode_scalars_into::<i32>(reader, &mut items, count, Unspecified::I32)?
         }
-        Some(Type::I16) => {
-            for _ in 0..count {
-                let mut v = 0i16;
-                v.decode(reader, None)?;
-                items.push(Unspecified::I16(v));
-            }
+        Type::I64_ORDINAL => {
+            decode_scalars_into::<i64>(reader, &mut items, count, Unspecified::I64)?
         }
-        Some(Type::I32) => {
-            for _ in 0..count {
-                let mut v = 0i32;
-                v.decode(reader, None)?;
-                items.push(Unspecified::I32(v));
-            }
+        Type::F32_ORDINAL => {
+            decode_scalars_into::<f32>(reader, &mut items, count, Unspecified::F32)?
         }
-        Some(Type::I64) => {
-            for _ in 0..count {
-                let mut v = 0i64;
-                v.decode(reader, None)?;
-                items.push(Unspecified::I64(v));
-            }
+        Type::F64_ORDINAL => {
+            decode_scalars_into::<f64>(reader, &mut items, count, Unspecified::F64)?
         }
-        Some(Type::F32) => {
-            for _ in 0..count {
-                let mut v = 0.0f32;
-                v.decode(reader, None)?;
-                items.push(Unspecified::F32(v));
-            }
-        }
-        Some(Type::F64) => {
-            for _ in 0..count {
-                let mut v = 0.0f64;
-                v.decode(reader, None)?;
-                items.push(Unspecified::F64(v));
-            }
-        }
-        Some(Type::Bool) => {
-            for _ in 0..count {
-                let mut v = false;
-                v.decode(reader, None)?;
-                items.push(Unspecified::Bool(v));
-            }
+        Type::BOOL_ORDINAL => {
+            decode_scalars_into::<bool>(reader, &mut items, count, Unspecified::Bool)?
         }
 
         // Structured, heterogeneous, or unknown: each element
@@ -554,6 +500,22 @@ fn capture_data_with_format(
     Ok(())
 }
 
+/// Decodes `count` blob-encoded scalars from `reader`,
+/// wrapping each with `wrap` and pushing to `items`.
+fn decode_scalars_into<T: Decodable + Default>(
+    reader: &mut (impl ReadsDecodable + ?Sized),
+    items: &mut Vec<Unspecified>,
+    count: usize,
+    wrap: fn(T) -> Unspecified,
+) -> Result<(), CodecError> {
+    for _ in 0..count {
+        let mut v = T::default();
+        v.decode(reader, None)?;
+        items.push(wrap(v));
+    }
+    Ok(())
+}
+
 /// Decodes `header.count` blob-encoded scalars from `reader`.
 ///
 /// - `count == 1` → returns `wrap(value)` (a single scalar).
@@ -578,11 +540,7 @@ fn decode_scalar_or_list<T: Decodable + Default>(
         }
         n => {
             let mut items = Vec::with_capacity((n as usize).min(1024));
-            for _ in 0..n {
-                let mut v = T::default();
-                v.decode(reader, None)?;
-                items.push(wrap(v));
-            }
+            decode_scalars_into(reader, &mut items, n as usize, wrap)?;
             Ok(Unspecified::List(items))
         }
     }
@@ -605,8 +563,8 @@ impl Decodable for Unspecified {
             }
         };
 
-        match Type::from_ordinal(header.format.ordinal) {
-            Some(Type::Unspecified) => {
+        match header.format.ordinal {
+            Type::UNSPECIFIED_ORDINAL => {
                 // Skip any data that might be present.
                 for _ in 0..header.count {
                     reader.skip_blob(header.format.blob_size as usize)?;
@@ -617,19 +575,19 @@ impl Decodable for Unspecified {
                 *self = Unspecified::Default;
             }
 
-            Some(Type::U8) => *self = decode_scalar_or_list(reader, header, Unspecified::U8)?,
-            Some(Type::U16) => *self = decode_scalar_or_list(reader, header, Unspecified::U16)?,
-            Some(Type::U32) => *self = decode_scalar_or_list(reader, header, Unspecified::U32)?,
-            Some(Type::U64) => *self = decode_scalar_or_list(reader, header, Unspecified::U64)?,
-            Some(Type::I8) => *self = decode_scalar_or_list(reader, header, Unspecified::I8)?,
-            Some(Type::I16) => *self = decode_scalar_or_list(reader, header, Unspecified::I16)?,
-            Some(Type::I32) => *self = decode_scalar_or_list(reader, header, Unspecified::I32)?,
-            Some(Type::I64) => *self = decode_scalar_or_list(reader, header, Unspecified::I64)?,
-            Some(Type::F32) => *self = decode_scalar_or_list(reader, header, Unspecified::F32)?,
-            Some(Type::F64) => *self = decode_scalar_or_list(reader, header, Unspecified::F64)?,
-            Some(Type::Bool) => *self = decode_scalar_or_list(reader, header, Unspecified::Bool)?,
+            Type::U8_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::U8)?,
+            Type::U16_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::U16)?,
+            Type::U32_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::U32)?,
+            Type::U64_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::U64)?,
+            Type::I8_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::I8)?,
+            Type::I16_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::I16)?,
+            Type::I32_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::I32)?,
+            Type::I64_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::I64)?,
+            Type::F32_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::F32)?,
+            Type::F64_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::F64)?,
+            Type::BOOL_ORDINAL => *self = decode_scalar_or_list(reader, header, Unspecified::Bool)?,
 
-            Some(Type::Text) => {
+            Type::TEXT_ORDINAL => {
                 // Create a copy of the original header with the
                 // ordinal zeroed out, matching internal types'
                 // expectation of having `ordinal = 0`.
@@ -646,14 +604,14 @@ impl Decodable for Unspecified {
                 *self = Unspecified::Text(v);
             }
 
-            Some(Type::List(_)) => {
+            Type::LIST_ORDINAL => {
                 // Validate outer header: List is always count=1, blob_size=0, data_fields=1.
                 if header.count != 1
                     || header.format.blob_size != 0
                     || header.format.data_fields != 1
                 {
                     return UnexpectedDataFormatSnafu {
-                        expected: Format::data(243).with(Format::Fluid),
+                        expected: Format::data(Type::LIST_ORDINAL).with(Format::Fluid),
                         actual: Some(header),
                     }
                     .fail();
@@ -662,14 +620,16 @@ impl Decodable for Unspecified {
                 *self = Unspecified::List(items);
             }
 
-            Some(Type::Map(_)) => {
+            Type::MAP_ORDINAL => {
                 // Validate outer header: Map is always count=1, blob_size=0, data_fields=2.
                 if header.count != 1
                     || header.format.blob_size != 0
                     || header.format.data_fields != 2
                 {
                     return UnexpectedDataFormatSnafu {
-                        expected: Format::data(242).with(Format::Fluid).with(Format::Fluid),
+                        expected: Format::data(Type::MAP_ORDINAL)
+                            .with(Format::Fluid)
+                            .with(Format::Fluid),
                         actual: Some(header),
                     }
                     .fail();
@@ -708,19 +668,8 @@ impl Decodable for Unspecified {
             _ => {
                 let mut raw = Vec::new();
                 for _ in 0..header.count {
-                    // Capture blob bytes.
-                    if header.format.blob_size > 0 {
-                        let start = raw.len();
-                        raw.resize(start + header.format.blob_size as usize, 0);
-                        reader.read_exact(&mut raw[start..])?;
-                    }
-
-                    // Capture data fields (header + payload) verbatim.
-                    for _ in 0..header.format.data_fields {
-                        capture_data(reader, &mut raw)?;
-                    }
+                    capture_data_with_format(reader, &mut raw, header.format)?;
                 }
-
                 *self = Unspecified::Data { header, raw };
             }
         }

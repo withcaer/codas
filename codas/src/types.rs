@@ -74,29 +74,43 @@ pub enum Type {
 }
 
 impl Type {
+    // Wire ordinals for built-in types.
+    // Built-in ordinals count down from 255; user-defined count up from 1.
+    pub(crate) const UNSPECIFIED_ORDINAL: u8 = 0;
+    pub(crate) const U8_ORDINAL: u8 = 255;
+    pub(crate) const U16_ORDINAL: u8 = 254;
+    pub(crate) const U32_ORDINAL: u8 = 253;
+    pub(crate) const U64_ORDINAL: u8 = 252;
+    pub(crate) const I8_ORDINAL: u8 = 251;
+    pub(crate) const I16_ORDINAL: u8 = 250;
+    pub(crate) const I32_ORDINAL: u8 = 249;
+    pub(crate) const I64_ORDINAL: u8 = 248;
+    pub(crate) const F32_ORDINAL: u8 = 247;
+    pub(crate) const F64_ORDINAL: u8 = 246;
+    pub(crate) const BOOL_ORDINAL: u8 = 245;
+    pub(crate) const TEXT_ORDINAL: u8 = 244;
+    pub(crate) const LIST_ORDINAL: u8 = 243;
+    pub(crate) const MAP_ORDINAL: u8 = 242;
+
     /// Returns the wire ordinal for this type.
-    ///
-    /// Built-in ordinals count down from `255`, while user-defined
-    /// ordinals count up from `1`. The ordinal at `0` is reserved
-    /// for unspecified data.
     pub const fn ordinal(&self) -> u8 {
         match self {
-            Type::Unspecified => 0,
-            Type::U8 => 255,
-            Type::U16 => 254,
-            Type::U32 => 253,
-            Type::U64 => 252,
-            Type::I8 => 251,
-            Type::I16 => 250,
-            Type::I32 => 249,
-            Type::I64 => 248,
-            Type::F32 => 247,
-            Type::F64 => 246,
-            Type::Bool => 245,
-            Type::Text => 244,
+            Type::Unspecified => Self::UNSPECIFIED_ORDINAL,
+            Type::U8 => Self::U8_ORDINAL,
+            Type::U16 => Self::U16_ORDINAL,
+            Type::U32 => Self::U32_ORDINAL,
+            Type::U64 => Self::U64_ORDINAL,
+            Type::I8 => Self::I8_ORDINAL,
+            Type::I16 => Self::I16_ORDINAL,
+            Type::I32 => Self::I32_ORDINAL,
+            Type::I64 => Self::I64_ORDINAL,
+            Type::F32 => Self::F32_ORDINAL,
+            Type::F64 => Self::F64_ORDINAL,
+            Type::Bool => Self::BOOL_ORDINAL,
+            Type::Text => Self::TEXT_ORDINAL,
             Type::Data(data) => data.format.as_data_format().ordinal,
-            Type::List(_) => 243,
-            Type::Map(_) => 242,
+            Type::List(_) => Self::LIST_ORDINAL,
+            Type::Map(_) => Self::MAP_ORDINAL,
         }
     }
 
@@ -110,21 +124,21 @@ impl Type {
     /// describe the element/key/value types.
     pub fn from_ordinal(ordinal: u8) -> Option<Self> {
         match ordinal {
-            0 => Some(Type::Unspecified),
-            255 => Some(Type::U8),
-            254 => Some(Type::U16),
-            253 => Some(Type::U32),
-            252 => Some(Type::U64),
-            251 => Some(Type::I8),
-            250 => Some(Type::I16),
-            249 => Some(Type::I32),
-            248 => Some(Type::I64),
-            247 => Some(Type::F32),
-            246 => Some(Type::F64),
-            245 => Some(Type::Bool),
-            244 => Some(Type::Text),
-            243 => Some(Type::List(Type::Unspecified.into())),
-            242 => Some(Type::Map((Type::Unspecified, Type::Unspecified).into())),
+            Self::UNSPECIFIED_ORDINAL => Some(Type::Unspecified),
+            Self::U8_ORDINAL => Some(Type::U8),
+            Self::U16_ORDINAL => Some(Type::U16),
+            Self::U32_ORDINAL => Some(Type::U32),
+            Self::U64_ORDINAL => Some(Type::U64),
+            Self::I8_ORDINAL => Some(Type::I8),
+            Self::I16_ORDINAL => Some(Type::I16),
+            Self::I32_ORDINAL => Some(Type::I32),
+            Self::I64_ORDINAL => Some(Type::I64),
+            Self::F32_ORDINAL => Some(Type::F32),
+            Self::F64_ORDINAL => Some(Type::F64),
+            Self::BOOL_ORDINAL => Some(Type::Bool),
+            Self::TEXT_ORDINAL => Some(Type::Text),
+            Self::LIST_ORDINAL => Some(Type::List(Type::Unspecified.into())),
+            Self::MAP_ORDINAL => Some(Type::Map((Type::Unspecified, Type::Unspecified).into())),
             _ => None,
         }
     }
@@ -467,8 +481,8 @@ impl Decodable for Type {
             .fail();
         }
 
-        match Type::from_ordinal(header.format.ordinal) {
-            Some(Type::List(_)) => {
+        match header.format.ordinal {
+            Self::LIST_ORDINAL => {
                 // List: blob_size=0, data_fields=1 (inner Type).
                 if header.format.blob_size != 0 || header.format.data_fields != 1 {
                     return UnexpectedDataFormatSnafu {
@@ -481,7 +495,7 @@ impl Decodable for Type {
                 reader.read_data_into(&mut typing)?;
                 *self = Type::List(typing.into());
             }
-            Some(Type::Map(_)) => {
+            Self::MAP_ORDINAL => {
                 // Map: blob_size=0, data_fields=2 (key Type + value Type).
                 if header.format.blob_size != 0 || header.format.data_fields != 2 {
                     return UnexpectedDataFormatSnafu {
@@ -496,31 +510,33 @@ impl Decodable for Type {
                 reader.read_data_into(&mut value_typing)?;
                 *self = Type::Map((key_typing, value_typing).into());
             }
-            Some(simple) => {
+            ordinal => match Type::from_ordinal(ordinal) {
                 // Scalars: blob_size=0, data_fields=0 (no payload).
-                if header.format.blob_size != 0 || header.format.data_fields != 0 {
-                    return UnexpectedDataFormatSnafu {
-                        expected: Self::FORMAT,
-                        actual: Some(header),
+                Some(simple) => {
+                    if header.format.blob_size != 0 || header.format.data_fields != 0 {
+                        return UnexpectedDataFormatSnafu {
+                            expected: Self::FORMAT,
+                            actual: Some(header),
+                        }
+                        .fail();
                     }
-                    .fail();
+                    *self = simple;
                 }
-                *self = simple;
-            }
-            // Any unknown ordinal is a data type descriptor.
-            None => {
-                // Data: blob_size=0, data_fields=1 (inner DataType).
-                if header.format.blob_size != 0 || header.format.data_fields != 1 {
-                    return UnexpectedDataFormatSnafu {
-                        expected: Self::FORMAT,
-                        actual: Some(header),
+                // Any unknown ordinal is a data type descriptor.
+                None => {
+                    // Data: blob_size=0, data_fields=1 (inner DataType).
+                    if header.format.blob_size != 0 || header.format.data_fields != 1 {
+                        return UnexpectedDataFormatSnafu {
+                            expected: Self::FORMAT,
+                            actual: Some(header),
+                        }
+                        .fail();
                     }
-                    .fail();
+                    let mut typing = DataType::default();
+                    reader.read_data_into(&mut typing)?;
+                    *self = Type::Data(typing);
                 }
-                let mut typing = DataType::default();
-                reader.read_data_into(&mut typing)?;
-                *self = Type::Data(typing);
-            }
+            },
         }
 
         Ok(())
