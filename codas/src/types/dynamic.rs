@@ -88,19 +88,6 @@ impl Unspecified {
         }
     }
 
-    /// Returns the shared type ordinal if all items have the
-    /// same [`type_ordinal`](Self::type_ordinal), or `None`
-    /// for empty or heterogeneous lists.
-    fn homogeneous_ordinal(items: &[Unspecified]) -> Option<u8> {
-        let first = items.first()?;
-        let ordinal = first.type_ordinal();
-        if items[1..].iter().all(|item| item.type_ordinal() == ordinal) {
-            Some(ordinal)
-        } else {
-            None
-        }
-    }
-
     /// Returns the default value of a `typing`.
     pub fn default_of(typing: &Type) -> Unspecified {
         match typing {
@@ -132,15 +119,22 @@ impl Unspecified {
     /// Returns the type-tag ordinal for this value.
     fn type_ordinal(&self) -> u8 {
         match self {
-            // We return these types manually to avoid an unnecessary
-            // heap allocation when delegating to self.as_type().
+            Unspecified::Default => Type::UNSPECIFIED_ORDINAL,
+            Unspecified::U8(_) => Type::U8_ORDINAL,
+            Unspecified::I8(_) => Type::I8_ORDINAL,
+            Unspecified::U16(_) => Type::U16_ORDINAL,
+            Unspecified::I16(_) => Type::I16_ORDINAL,
+            Unspecified::U32(_) => Type::U32_ORDINAL,
+            Unspecified::I32(_) => Type::I32_ORDINAL,
+            Unspecified::U64(_) => Type::U64_ORDINAL,
+            Unspecified::I64(_) => Type::I64_ORDINAL,
+            Unspecified::F32(_) => Type::F32_ORDINAL,
+            Unspecified::F64(_) => Type::F64_ORDINAL,
+            Unspecified::Bool(_) => Type::BOOL_ORDINAL,
             Unspecified::Text(_) => Type::TEXT_ORDINAL,
             Unspecified::List(_) => Type::LIST_ORDINAL,
             Unspecified::Map(_) => Type::MAP_ORDINAL,
-            // Data preserves the original wire ordinal.
             Unspecified::Data { header, .. } => header.format.ordinal,
-            // All other variants delegate to their Type's ordinal.
-            _ => self.as_type().ordinal(),
         }
     }
 
@@ -268,12 +262,31 @@ fn encode_unspecified_list(
 ) -> Result<(), CodecError> {
     let count = codec::try_count(items.len())?;
 
-    // Reject lists containing Default items — they carry no data.
-    if items.iter().any(|i| matches!(i, Unspecified::Default)) {
-        return UnsupportedDataFormatSnafu { ordinal: 0u8 }.fail();
-    }
+    // Single pass: reject Default items and determine homogeneity.
+    let homogeneous_ordinal = if let Some(first) = items.first() {
+        if matches!(first, Unspecified::Default) {
+            return UnsupportedDataFormatSnafu { ordinal: 0u8 }.fail();
+        }
+        let ordinal = first.type_ordinal();
+        let mut homogeneous = true;
+        for item in &items[1..] {
+            if matches!(item, Unspecified::Default) {
+                return UnsupportedDataFormatSnafu { ordinal: 0u8 }.fail();
+            }
+            if homogeneous && item.type_ordinal() != ordinal {
+                homogeneous = false;
+            }
+        }
+        if homogeneous {
+            Some(ordinal)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
-    match Unspecified::homogeneous_ordinal(items) {
+    match homogeneous_ordinal {
         Some(ordinal) => {
             // All elements share the same type ordinal.
             // Use the first element to determine the encoding format.
