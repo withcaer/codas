@@ -156,6 +156,8 @@ Each benchmark table  contains a `Scenario` column, which describes the number o
 
 - `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
 
+One outlier in the benchmarks is the Tokio broadcast channel. This channel has strong performance in the `Many(N):*` scenarios, but doesn't support back pressure: If consumers fall behind the producer(s), the channel will drop messages entirely to make room for new ones.
+
 Benchmarks on a `13" MacBook Air M3 (2024, 16GB)`:
 
 <details>

@@ -457,6 +457,81 @@ fn channels(c: &mut Criterion) {
             *i += 1;
         });
     });
+
+    group.bench_function("Many(N):1 Tokio (MPSC); Move->Take", |b| {
+        let (tx, mut rx) = mpsc::channel::<TestStruct>(BUFFER_SIZE);
+
+        // Spawn event handler in a loop.
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.spawn(async move {
+            loop {
+                let _data = rx.recv().await.expect("value");
+            }
+        });
+
+        // Spawn background producers.
+        for _ in 0..BACKGROUND_PRODUCERS {
+            let tx = tx.clone();
+            let counter = Arc::new(AtomicI64::new(0));
+            let c = counter.clone();
+            runtime.spawn(async move {
+                loop {
+                    let val = c.fetch_add(1, Ordering::Relaxed);
+                    if tx.send(TestStruct { value: val }).await.is_err() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        // Publish from the benchmark thread under contention.
+        let i = RefCell::new(0);
+        b.to_async(runtime).iter(|| async {
+            tx.send(TestStruct { value: *i.borrow() }).await.unwrap();
+            *i.borrow_mut() += 1;
+        });
+    });
+
+    group.bench_function("Many(N):Many(1) Tokio (Broadcast); Move->Clone", |b| {
+        let (tx, mut rx) = broadcast::channel::<TestStruct>(BUFFER_SIZE);
+
+        // Spawn event handler in a loop.
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(_data) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(..) => unimplemented!(),
+                }
+            }
+        });
+
+        // Spawn background producers.
+        for _ in 0..BACKGROUND_PRODUCERS {
+            let tx = tx.clone();
+            let counter = Arc::new(AtomicI64::new(0));
+            let c = counter.clone();
+            runtime.spawn(async move {
+                loop {
+                    let val = c.fetch_add(1, Ordering::Relaxed);
+                    if tx.send(TestStruct { value: val }).is_err() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        // Publish from the benchmark thread under contention.
+        let i = RefCell::new(0);
+        b.to_async(runtime).iter(|| async {
+            let mut i = i.borrow_mut();
+            let _ = tx.send(TestStruct { value: *i }).unwrap();
+            *i += 1;
+        });
+    });
 }
 
 // Create a new group named `benches` and
