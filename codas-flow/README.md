@@ -164,20 +164,22 @@ Benchmarks on a `13" MacBook Air M3 (2024, 16GB)`:
 
 Scenario | Channel | Latency Per Message | Throughput
 --|--|--|--
-`1:1` | Crossfire (SPSC) | `7ns` | `140M/s`
-`1:1` | Disruptor (Single Producer) | `7ns` | `143M/s`
-`Many(1):1` | Flow (Subscriber) | `55ns` | `18M/s`
-`Many(1):1` | Crossfire (MPSC) | `38ns` | `27M/s`
+`1:1` | Crossfire (SPSC) | `7ns` | `141M/s`
+`1:1` | Disruptor (Single Producer) | `7ns` | `147M/s`
+`Many(1):1` | Flow (Subscriber) | `53ns` | `19M/s`
+`Many(1):1` | Crossfire (MPSC) | `38ns` | `26M/s`
 `Many(1):1` | Disruptor (Multi Producer) | `20ns` | `50M/s`
-`Many(1):1` | Tokio (MPSC) | `66ns` | `15M/s`
-`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `23ns` | `43M/s`
-`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `16ns` | `64M/s`
-`Many(1):Many(1)` | Tokio (Broadcast) | `27ns` | `37M/s`
-`Many(N):1` | Flow (Subscriber) | `91ns` | `11M/s`
-`Many(N):1` | Crossfire (MPSC) | `32ns` | `31M/s`
-`Many(N):1` | Disruptor (Multi Producer) | `538ns` | `2M/s`
-`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `96ns` | `10M/s`
-`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `70ns` | `14M/s`
+`Many(1):1` | Tokio (MPSC) | `73ns` | `14M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `25ns` | `39M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `16ns` | `63M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `28ns` | `36M/s`
+`Many(N):1` | Flow (Subscriber) | `94ns` | `11M/s`
+`Many(N):1` | Crossfire (MPSC) | `33ns` | `30M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `531ns` | `2M/s`
+`Many(N):1` | Tokio (MPSC) | `242ns` | `4M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `98ns` | `10M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `71ns` | `14M/s`
+`Many(N):Many(1)` | Tokio (Broadcast) | `24ns` | `42M/s`
 
 </details>
 &nbsp;
@@ -188,20 +190,22 @@ Benchmarks on a a `Hetzner CCX23 AMD EPYC, 4 dedicated vCPUs, 16GB`:
 
 Scenario | Channel | Latency Per Message | Throughput
 --|--|--|--
-`1:1` | Crossfire (SPSC) | `15ns` | `68M/s`
-`1:1` | Disruptor (Single Producer) | `9ns` | `114M/s`
-`Many(1):1` | Flow (Subscriber) | `69ns` | `14M/s`
-`Many(1):1` | Crossfire (MPSC) | `27ns` | `37M/s`
+`1:1` | Crossfire (SPSC) | `15ns` | `69M/s`
+`1:1` | Disruptor (Single Producer) | `9ns` | `117M/s`
+`Many(1):1` | Flow (Subscriber) | `72ns` | `14M/s`
+`Many(1):1` | Crossfire (MPSC) | `27ns` | `38M/s`
 `Many(1):1` | Disruptor (Multi Producer) | `42ns` | `24M/s`
-`Many(1):1` | Tokio (MPSC) | `68ns` | `15M/s`
-`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `50ns` | `20M/s`
+`Many(1):1` | Tokio (MPSC) | `82ns` | `12M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `48ns` | `21M/s`
 `Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `35ns` | `28M/s`
-`Many(1):Many(1)` | Tokio (Broadcast) | `41ns` | `24M/s`
-`Many(N):1` | Flow (Subscriber) | `92ns` | `11M/s`
-`Many(N):1` | Crossfire (MPSC) | `33ns` | `30M/s`
-`Many(N):1` | Disruptor (Multi Producer) | `242ns` | `4M/s`
-`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `128ns` | `8M/s`
-`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `80ns` | `12M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `32ns` | `32M/s`
+`Many(N):1` | Flow (Subscriber) | `141ns` | `7M/s`
+`Many(N):1` | Crossfire (MPSC) | `30ns` | `33M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `213ns` | `5M/s`
+`Many(N):1` | Tokio (MPSC) | `140ns` | `7M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `244ns` | `4M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `88ns` | `11M/s`
+`Many(N):Many(1)` | Tokio (Broadcast) | `87ns` | `12M/s`
 
 </details>
 
