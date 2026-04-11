@@ -179,8 +179,10 @@ fn channels(c: &mut Criterion) {
     });
 
     group.bench_function("1:1 Disruptor (Single Producer); Mutate->Read", |b| {
-        let processor = |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
-            std::hint::black_box(e.value);
+        let mut next_i = 0u64;
+        let processor = move |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
+            assert_eq!(next_i, e.value as u64);
+            next_i += 1;
         };
 
         let mut producer = build_single_producer(BUFFER_SIZE, TestStruct::default, BusySpin)
@@ -198,8 +200,10 @@ fn channels(c: &mut Criterion) {
     });
 
     group.bench_function("Many(1):1 Disruptor (Multi Producer); Mutate->Read", |b| {
-        let processor = |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
-            std::hint::black_box(e.value);
+        let mut next_i = 0u64;
+        let processor = move |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
+            assert_eq!(next_i, e.value as u64);
+            next_i += 1;
         };
 
         let mut producer = build_multi_producer(BUFFER_SIZE, TestStruct::default, BusySpin)
@@ -276,6 +280,7 @@ fn channels(c: &mut Criterion) {
                     if tx.send(TestStruct { value: val }).await.is_err() {
                         break;
                     }
+                    tokio::task::yield_now().await;
                 }
             });
         }
