@@ -148,25 +148,66 @@ Target | Lock-Free?
 
 ## Relative Performance [("Benchmarks")](benches/channels.rs)
 
+First, a caveat: Benchmarks are quite noisy, and shouldn't be used as absolute references--particularly benchmarks from different platforms. Instead, these benchmarks should be used to understand the relevant performance of different scenarios and frameworks on the _same_ platform.
+
+Each benchmark table  contains a `Scenario` column, which describes the number of producers and consumers in the test:
+
+- `Many(1)` scenarios use a multi-producer/consumer capable channel with just one producer and/or consumer. 
+
+- `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
+
+One outlier in the benchmarks is the Tokio broadcast channel. This channel has strong performance in the `Many(N):*` scenarios, but doesn't support back pressure: If consumers fall behind the producer(s), the channel will drop messages entirely to make room for new ones.
+
+Benchmarks on a `13" MacBook Air M3 (2024, 16GB)`:
+
+<details>
+
 Scenario | Channel | Latency Per Message | Throughput
 --|--|--|--
-`1:1` | Crossfire (SPSC) | `8ns` | `132M/s`
+`1:1` | Crossfire (SPSC) | `8ns` | `131M/s`
+`1:1` | Disruptor (Single Producer) | `7ns` | `135M/s`
 `Many(1):1` | Flow (Subscriber) | `54ns` | `18M/s`
 `Many(1):1` | Crossfire (MPSC) | `38ns` | `26M/s`
-`Many(1):1` | Tokio (MPSC) | `67ns` | `15M/s`
-`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `24ns` | `42M/s`
-`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `17ns` | `60M/s`
-`Many(1):Many(1)` | Tokio (Broadcast) | `27ns` | `36M/s`
-`Many(N):1` | Flow (Subscriber) | `89ns` | `11M/s`
-`Many(N):1` | Crossfire (MPSC) | `221ns` | `5M/s`
+`Many(1):1` | Disruptor (Multi Producer) | `27ns` | `38M/s`
+`Many(1):1` | Tokio (MPSC) | `77ns` | `13M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `23ns` | `43M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `16ns` | `64M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `28ns` | `36M/s`
+`Many(N):1` | Flow (Subscriber) | `94ns` | `11M/s`
+`Many(N):1` | Crossfire (MPSC) | `32ns` | `32M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `529ns` | `2M/s`
+`Many(N):1` | Tokio (MPSC) | `327ns` | `3M/s`
 `Many(N):Many(1)` | Flow (Stage, Crate Yield) | `98ns` | `10M/s`
-`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `70ns` | `14M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `66ns` | `15M/s`
+`Many(N):Many(1)` | Tokio (Broadcast) | `25ns` | `40M/s`
 
-> Comparative performance of different scenarios, measured on a 13" MacBook Air M3 (2024, 16GB). Exact numbers will vary between platforms.
->
-> `Many(1)` scenarios use a multi-producer/consumer capable channel with just one producer and/or consumer.
->
-> `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
+</details>
+&nbsp;
+
+Benchmarks on a a `Hetzner CCX23 AMD EPYC, 4 dedicated vCPUs, 16GB`:
+
+<details>
+
+Scenario | Channel | Latency Per Message | Throughput
+--|--|--|--
+`1:1` | Crossfire (SPSC) | `15ns` | `68M/s`
+`1:1` | Disruptor (Single Producer) | `9ns` | `117M/s`
+`Many(1):1` | Flow (Subscriber) | `69ns` | `15M/s`
+`Many(1):1` | Crossfire (MPSC) | `27ns` | `37M/s`
+`Many(1):1` | Disruptor (Multi Producer) | `43ns` | `23M/s`
+`Many(1):1` | Tokio (MPSC) | `72ns` | `14M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `49ns` | `20M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `36ns` | `28M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `38ns` | `27M/s`
+`Many(N):1` | Flow (Subscriber) | `123ns` | `8M/s`
+`Many(N):1` | Crossfire (MPSC) | `31ns` | `33M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `292ns` | `3M/s`
+`Many(N):1` | Tokio (MPSC) | `144ns` | `7M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `131ns` | `8M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `76ns` | `13M/s`
+`Many(N):Many(1)` | Tokio (Broadcast) | `81ns` | `12M/s`
+
+</details>
 
 ## License
 

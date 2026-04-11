@@ -452,7 +452,9 @@ impl<T: Flows> DerefMut for UnpublishedData<'_, T> {
 
 impl<T: Flows> Drop for UnpublishedData<'_, T> {
     fn drop(&mut self) {
-        while !self.flow.state.try_publish(self.sequence) {}
+        while !self.flow.state.try_publish(self.sequence) {
+            core::hint::spin_loop();
+        }
     }
 }
 

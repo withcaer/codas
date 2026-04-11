@@ -46,6 +46,9 @@ criterion.workspace = true
 # Crossfire is used as a benchmark comparison.
 crossfire = "3.1.7"
 
+# Disruptor is used as a benchmark comparison.
+disruptor = "4.0.0"
+
 [[bench]]
 name = "channels"
 harness = false
