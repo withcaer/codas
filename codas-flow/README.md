@@ -148,14 +148,25 @@ Target | Lock-Free?
 
 ## Relative Performance [("Benchmarks")](benches/channels.rs)
 
-Operation | `codas (flow)` | `codas (stage)` | `codas (stage w/ tokio-yield)` | `tokio (mpsc)` | `tokio (broadcast)`
---|--|--|--|--|--
-`Move -> Read` | `55ns (18M/s)` | `26ns (38M/s)` | `19ns (53M/s)` | - | - |
-`Move -> Take` | - | - | - | `70ns (14M/s)` | - |
-`Move -> Clone` | - | - | - | - | `33ns (30M/s)` | 
+Scenario | Channel | Latency Per Message | Throughput
+--|--|--|--
+`1:1` | Crossfire (SPSC) | `8ns` | `132M/s`
+`Many(1):1` | Flow (Subscriber) | `54ns` | `18M/s`
+`Many(1):1` | Crossfire (MPSC) | `38ns` | `26M/s`
+`Many(1):1` | Tokio (MPSC) | `67ns` | `15M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `24ns` | `42M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `17ns` | `60M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `27ns` | `36M/s`
+`Many(N):1` | Flow (Subscriber) | `89ns` | `11M/s`
+`Many(N):1` | Crossfire (MPSC) | `221ns` | `5M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `98ns` | `10M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `70ns` | `14M/s`
 
-> Comparitive performance of different scenarios we've written
-> benchmarks for. Exact numbers will vary between platforms.
+> Comparative performance of different scenarios, measured on a 13" MacBook Air M3 (2024, 16GB). Exact numbers will vary between platforms.
+>
+> `Many(1)` scenarios use a multi-producer/consumer capable channel with just one producer and/or consumer.
+>
+> `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
 
 ## License
 
