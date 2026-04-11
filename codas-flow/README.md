@@ -168,6 +168,22 @@ Scenario | Channel | Latency Per Message | Throughput
 >
 > `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
 
+Scenario | Channel | Latency Per Message | Throughput
+--|--|--|--
+`1:1` | Crossfire (SPSC) | `12ns` | `79M/s`
+`Many(1):1` | Flow (Subscriber) | `66ns` | `15M/s`
+`Many(1):1` | Crossfire (MPSC) | `26ns` | `37M/s`
+`Many(1):1` | Tokio (MPSC) | `82ns` | `12M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `29ns` | `34M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `25ns` | `39M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `39ns` | `25M/s`
+`Many(N):1` | Flow (Subscriber) | `99ns` | `10M/s`
+`Many(N):1` | Crossfire (MPSC) | `98ns` | `10M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `110ns` | `9M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `85ns` | `11M/s`
+
+> Comparative performance of different scenarios, measured on a Thinkpad X13 Gen 2 AMD Ryzen™ 7 PRO 5850U, 16GB.
+
 ## License
 
 Copyright © 2024 - 2026 With Caer, LLC and Alicorn Systems, LLC.

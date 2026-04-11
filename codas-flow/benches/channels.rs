@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 
 use codas_flow::{
@@ -9,6 +9,7 @@ use codas_flow::{
 use criterion::{criterion_group, criterion_main, Criterion};
 use crossfire::mpsc as crossfire_mpsc;
 use crossfire::spsc as crossfire_spsc;
+use disruptor::{build_multi_producer, build_single_producer, BusySpin, Producer, Sequence};
 use tokio::sync::{broadcast, mpsc};
 
 const BUFFER_SIZE: usize = 1024;
@@ -175,6 +176,82 @@ fn channels(c: &mut Criterion) {
             tx.send(TestStruct { value: *i.borrow() }).await.unwrap();
             *i.borrow_mut() += 1;
         });
+    });
+
+    group.bench_function("1:1 Disruptor (Single Producer); Mutate->Read", |b| {
+        let processor = |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
+            std::hint::black_box(e.value);
+        };
+
+        let mut producer = build_single_producer(BUFFER_SIZE, TestStruct::default, BusySpin)
+            .handle_events_with(processor)
+            .build();
+
+        let mut i = 0i64;
+        b.iter(|| {
+            let val = i;
+            producer.publish(|e| {
+                e.value = val;
+            });
+            i += 1;
+        });
+    });
+
+    group.bench_function("Many(1):1 Disruptor (Multi Producer); Mutate->Read", |b| {
+        let processor = |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
+            std::hint::black_box(e.value);
+        };
+
+        let mut producer = build_multi_producer(BUFFER_SIZE, TestStruct::default, BusySpin)
+            .handle_events_with(processor)
+            .build();
+
+        let mut i = 0i64;
+        b.iter(|| {
+            let val = i;
+            producer.publish(|e| {
+                e.value = val;
+            });
+            i += 1;
+        });
+    });
+
+    group.bench_function("Many(N):1 Disruptor (Multi Producer); Mutate->Read", |b| {
+        let processor = |e: &TestStruct, _sequence: Sequence, _end_of_batch: bool| {
+            std::hint::black_box(e.value);
+        };
+
+        let mut producer = build_multi_producer(BUFFER_SIZE, TestStruct::default, BusySpin)
+            .handle_events_with(processor)
+            .build();
+
+        // Spawn background producers on dedicated threads.
+        let running = Arc::new(AtomicBool::new(true));
+        for _ in 0..BACKGROUND_PRODUCERS {
+            let mut bg_producer = producer.clone();
+            let running = running.clone();
+            std::thread::spawn(move || {
+                let mut val = 0i64;
+                while running.load(Ordering::Relaxed) {
+                    bg_producer.publish(|e| {
+                        e.value = val;
+                    });
+                    val += 1;
+                }
+            });
+        }
+
+        // Publish from the benchmark thread under contention.
+        let mut i = 0i64;
+        b.iter(|| {
+            let val = i;
+            producer.publish(|e| {
+                e.value = val;
+            });
+            i += 1;
+        });
+
+        running.store(false, Ordering::Relaxed);
     });
 
     group.bench_function("Many(N):1 Crossfire (MPSC); Move->Take", |b| {
