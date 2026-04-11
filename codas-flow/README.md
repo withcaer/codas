@@ -148,41 +148,60 @@ Target | Lock-Free?
 
 ## Relative Performance [("Benchmarks")](benches/channels.rs)
 
+First, a caveat: Benchmarks are quite noisy, and shouldn't be used as absolute references--particularly benchmarks from different platforms. Instead, these benchmarks should be used to understand the relevant performance of different scenarios and frameworks on the _same_ platform.
+
+Each benchmark table  contains a `Scenario` column, which describes the number of producers and consumers in the test:
+
+- `Many(1)` scenarios use a multi-producer/consumer capable channel with just one producer and/or consumer. 
+
+- `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
+
+Benchmarks on a `13" MacBook Air M3 (2024, 16GB)`:
+
+<details>
+
 Scenario | Channel | Latency Per Message | Throughput
 --|--|--|--
-`1:1` | Crossfire (SPSC) | `8ns` | `132M/s`
-`Many(1):1` | Flow (Subscriber) | `54ns` | `18M/s`
-`Many(1):1` | Crossfire (MPSC) | `38ns` | `26M/s`
+`1:1` | Crossfire (SPSC) | `7ns` | `149M/s`
+`1:1` | Disruptor (Single Producer) | `7ns` | `145M/s`
+`Many(1):1` | Flow (Subscriber) | `55ns` | `18M/s`
+`Many(1):1` | Crossfire (MPSC) | `37ns` | `27M/s`
+`Many(1):1` | Disruptor (Multi Producer) | `23ns` | `43M/s`
 `Many(1):1` | Tokio (MPSC) | `67ns` | `15M/s`
 `Many(1):Many(1)` | Flow (Stage, Crate Yield) | `24ns` | `42M/s`
-`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `17ns` | `60M/s`
-`Many(1):Many(1)` | Tokio (Broadcast) | `27ns` | `36M/s`
-`Many(N):1` | Flow (Subscriber) | `89ns` | `11M/s`
-`Many(N):1` | Crossfire (MPSC) | `221ns` | `5M/s`
-`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `98ns` | `10M/s`
-`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `70ns` | `14M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `16ns` | `63M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `28ns` | `36M/s`
+`Many(N):1` | Flow (Subscriber) | `93ns` | `11M/s`
+`Many(N):1` | Crossfire (MPSC) | `198ns` | `5M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `537ns` | `2M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `99ns` | `10M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `72ns` | `14M/s`
 
-> Comparative performance of different scenarios, measured on a 13" MacBook Air M3 (2024, 16GB). Exact numbers will vary between platforms.
->
-> `Many(1)` scenarios use a multi-producer/consumer capable channel with just one producer and/or consumer.
->
-> `Many(N)` scenarios use a multi-producer/consumer capable channel with two or more producers and/or consumers.
+</details>
+&nbsp;
+
+Benchmarks on a a `Hetzner CCX23 AMD EPYC, 4 dedicated vCPUs, 16GB`:
+
+<details>
 
 Scenario | Channel | Latency Per Message | Throughput
 --|--|--|--
-`1:1` | Crossfire (SPSC) | `12ns` | `79M/s`
+`1:1` | Crossfire (SPSC) | `14ns` | `70M/s`
+`1:1` | Disruptor (Single Producer) | `8ns` | `118M/s`
 `Many(1):1` | Flow (Subscriber) | `66ns` | `15M/s`
-`Many(1):1` | Crossfire (MPSC) | `26ns` | `37M/s`
-`Many(1):1` | Tokio (MPSC) | `82ns` | `12M/s`
-`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `29ns` | `34M/s`
-`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `25ns` | `39M/s`
-`Many(1):Many(1)` | Tokio (Broadcast) | `39ns` | `25M/s`
-`Many(N):1` | Flow (Subscriber) | `99ns` | `10M/s`
-`Many(N):1` | Crossfire (MPSC) | `98ns` | `10M/s`
-`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `110ns` | `9M/s`
-`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `85ns` | `11M/s`
+`Many(1):1` | Crossfire (MPSC) | `26ns` | `39M/s`
+`Many(1):1` | Disruptor (Multi Producer) | `42ns` | `24M/s`
+`Many(1):1` | Tokio (MPSC) | `66ns` | `15M/s`
+`Many(1):Many(1)` | Flow (Stage, Crate Yield) | `49ns` | `21M/s`
+`Many(1):Many(1)` | Flow (Stage, Tokio Yield) | `34ns` | `29M/s`
+`Many(1):Many(1)` | Tokio (Broadcast) | `35ns` | `29M/s`
+`Many(N):1` | Flow (Subscriber) | `83ns` | `12M/s`
+`Many(N):1` | Crossfire (MPSC) | `205ns` | `5M/s`
+`Many(N):1` | Disruptor (Multi Producer) | `259ns` | `4M/s`
+`Many(N):Many(1)` | Flow (Stage, Crate Yield) | `144ns` | `7M/s`
+`Many(N):Many(1)` | Flow (Stage, Tokio Yield) | `68ns` | `15M/s`
 
-> Comparative performance of different scenarios, measured on a Thinkpad X13 Gen 2 AMD Ryzen™ 7 PRO 5850U, 16GB.
+</details>
 
 ## License
 
