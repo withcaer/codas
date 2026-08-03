@@ -168,6 +168,10 @@ fn open_api_type(typing: &Type) -> OpenApiTypeIdentifier {
         }
         Type::Bool => OpenApiTypeIdentifier::Unformatted(Text::Static("boolean")),
         Type::Text => OpenApiTypeIdentifier::Unformatted(Text::Static("string")),
+        Type::Array(_, elem) => {
+            let elem = open_api_type(elem.as_ref());
+            OpenApiTypeIdentifier::Array(elem.into())
+        }
         Type::Data(typing) => OpenApiTypeIdentifier::ObjectReference(typing.name.clone()),
         Type::List(typing) => {
             let typing = open_api_type(typing.as_ref());

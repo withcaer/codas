@@ -181,6 +181,23 @@ pub enum DataFieldToken<'a> {
     #[regex(r"(?i)flattened(?&space)")]
     Flattened,
 
+    /// This token indicates a field is a fixed-size
+    /// array containing the array's element count.
+    ///
+    /// If encountered, this token _should_ be followed
+    /// by the array's element type.
+    ///
+    /// The count is validated (non-zero, at most [`u16::MAX`])
+    /// during coda parsing, not lexing.
+    #[regex(r"(?i)array(?&space)of(?&space)[0-9]+(?&space)", |lex| {
+        let slice = lex.slice();
+
+        // Slice contains: array of N
+        let mut split = slice.split_whitespace();
+        split.nth(2).and_then(|count| count.parse().ok()).unwrap_or(u64::MAX)
+    })]
+    Array(u64),
+
     /// This token indicates a field is
     /// semantically a list.
     ///
@@ -246,42 +263,24 @@ fn parse_data_field(slice: &str) -> ParsedField {
     let mut name = slice;
     let mut optional = false;
     let mut flattened = false;
-    let mut list_dimensions = 0;
-    let mut typing = vec![];
-    let mut is_map = false;
+    let mut tokens = vec![];
 
     for token in lexer.filter_map(|t| t.ok()) {
         match token {
             DataFieldToken::FieldName(field_name) => name = field_name,
             DataFieldToken::Optional => optional = true,
             DataFieldToken::Flattened => flattened = true,
-            DataFieldToken::List(dimensions) => list_dimensions = dimensions,
-            DataFieldToken::Map => is_map = true,
-            DataFieldToken::FieldType(type_name) => {
-                typing.push(type_name.into());
-            }
+            token => tokens.push(token),
         }
     }
 
-    let typing = match (list_dimensions, is_map, typing.len()) {
-        // A scalar.
-        (0, false, 1) => ParsedFieldType::Scalar(typing.pop().unwrap()),
+    let mut tokens = tokens.into_iter();
+    let typing = parse_field_type(&mut tokens);
 
-        // A list.
-        (n, false, 1) if n > 0 => ParsedFieldType::List(n, typing.pop().unwrap()),
-
-        // A map.
-        (0, true, 2) => {
-            let value_typing = typing.pop().unwrap();
-            let key_typing = typing.pop().unwrap();
-            ParsedFieldType::Map(key_typing, value_typing)
-        }
-
-        // A mistake.
-        (dimensions, is_map, length) => {
-            todo!("malformed field: {dimensions:?} - {is_map} - {length}");
-        }
-    };
+    // Any tokens remaining after a complete type are a mistake.
+    if let Some(token) = tokens.next() {
+        todo!("malformed field: unexpected {token:?}");
+    }
 
     ParsedField {
         name: name.into(),
@@ -289,5 +288,40 @@ fn parse_data_field(slice: &str) -> ParsedField {
         typing,
         optional,
         flattened,
+    }
+}
+
+/// Recursively parses the next complete
+/// [`ParsedFieldType`] from `tokens`.
+fn parse_field_type<'a>(tokens: &mut impl Iterator<Item = DataFieldToken<'a>>) -> ParsedFieldType {
+    match tokens.next() {
+        // A scalar.
+        Some(DataFieldToken::FieldType(type_name)) => ParsedFieldType::Scalar(type_name.into()),
+
+        // An array of some other type.
+        Some(DataFieldToken::Array(count)) => {
+            ParsedFieldType::Array(count, parse_field_type(tokens).into())
+        }
+
+        // A list of some other type.
+        Some(DataFieldToken::List(dimensions)) => {
+            ParsedFieldType::List(dimensions, parse_field_type(tokens).into())
+        }
+
+        // A map of one scalar type to another.
+        Some(DataFieldToken::Map) => {
+            let key_typing = match tokens.next() {
+                Some(DataFieldToken::FieldType(type_name)) => type_name,
+                token => todo!("malformed field: expected a map key type, found {token:?}"),
+            };
+            let value_typing = match tokens.next() {
+                Some(DataFieldToken::FieldType(type_name)) => type_name,
+                token => todo!("malformed field: expected a map value type, found {token:?}"),
+            };
+            ParsedFieldType::Map(key_typing.into(), value_typing.into())
+        }
+
+        // A mistake.
+        token => todo!("malformed field: expected a type, found {token:?}"),
     }
 }

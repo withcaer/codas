@@ -23,6 +23,7 @@ pub mod list;
 pub mod map;
 pub mod number;
 mod text;
+pub use binary::Array;
 pub use dynamic::Unspecified;
 pub use text::*;
 
@@ -63,6 +64,12 @@ pub enum Type {
     /// UTF-8 encoded text.
     Text,
 
+    /// Fixed-size sequence of a fixed-size element type.
+    ///
+    /// Elements of the array _must_ have a fixed size
+    /// (i.e., a [`Format::Blob`] format).
+    Array(u16, Box<Type>),
+
     /// Data with [`DataType`].
     Data(DataType),
 
@@ -89,8 +96,9 @@ impl Type {
     pub(crate) const F64_ORDINAL: u8 = 246;
     pub(crate) const BOOL_ORDINAL: u8 = 245;
     pub(crate) const TEXT_ORDINAL: u8 = 244;
-    pub(crate) const LIST_ORDINAL: u8 = 243;
-    pub(crate) const MAP_ORDINAL: u8 = 242;
+    pub(crate) const ARRAY_ORDINAL: u8 = 243;
+    pub(crate) const LIST_ORDINAL: u8 = 242;
+    pub(crate) const MAP_ORDINAL: u8 = 241;
 
     /// Returns the wire ordinal for this type.
     pub const fn ordinal(&self) -> u8 {
@@ -108,6 +116,7 @@ impl Type {
             Type::F64 => Self::F64_ORDINAL,
             Type::Bool => Self::BOOL_ORDINAL,
             Type::Text => Self::TEXT_ORDINAL,
+            Type::Array(..) => Self::ARRAY_ORDINAL,
             Type::Data(data) => data.format.as_data_format().ordinal,
             Type::List(_) => Self::LIST_ORDINAL,
             Type::Map(_) => Self::MAP_ORDINAL,
@@ -120,8 +129,9 @@ impl Type {
     /// `None` is returned.
     ///
     /// List and Map return placeholder inner types
-    /// ([`Type::Unspecified`]) since the ordinal alone doesn't
-    /// describe the element/key/value types.
+    /// ([`Type::Unspecified`]), and Array returns a
+    /// placeholder count of `0`, since the ordinal alone
+    /// doesn't describe them.
     pub fn from_ordinal(ordinal: u8) -> Option<Self> {
         match ordinal {
             Self::UNSPECIFIED_ORDINAL => Some(Type::Unspecified),
@@ -137,6 +147,7 @@ impl Type {
             Self::F64_ORDINAL => Some(Type::F64),
             Self::BOOL_ORDINAL => Some(Type::Bool),
             Self::TEXT_ORDINAL => Some(Type::Text),
+            Self::ARRAY_ORDINAL => Some(Type::Array(0, Type::Unspecified.into())),
             Self::LIST_ORDINAL => Some(Type::List(Type::Unspecified.into())),
             Self::MAP_ORDINAL => Some(Type::Map((Type::Unspecified, Type::Unspecified).into())),
             _ => None,
@@ -159,6 +170,17 @@ impl Type {
             Type::F64 => f64::FORMAT,
             Type::Bool => bool::FORMAT,
             Type::Text => Text::FORMAT,
+            Type::Array(count, elem) => match elem.format() {
+                Format::Blob(size) => {
+                    let total = *count as u32 * size as u32;
+                    assert!(
+                        total <= u16::MAX as u32,
+                        "array size exceeds maximum blob size (u16::MAX)"
+                    );
+                    Format::Blob(total as u16)
+                }
+                _ => panic!("array elements must have a fixed size"),
+            },
             Type::Data(data) => data.format,
             Type::List(typing) => typing.format().as_data_format().as_format(),
 
@@ -426,6 +448,10 @@ impl Encodable for Type {
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
         match self {
+            Type::Array(count, elem) => {
+                writer.write_data(count)?;
+                writer.write_data(elem.as_ref())
+            }
             Type::Data(typing) => writer.write_data(typing),
             Type::List(typing) => writer.write_data(typing.as_ref()),
             Type::Map(typing) => {
@@ -434,7 +460,7 @@ impl Encodable for Type {
                 Ok(())
             }
 
-            // Only data types contain additional encoded info.
+            // Only array and data types contain additional encoded info.
             _ => Ok(()),
         }
     }
@@ -449,6 +475,10 @@ impl Encodable for Type {
                 .with(Type::FORMAT)
                 .as_data_format(),
             Type::Data(..) | Type::List(_) => Format::data(self.ordinal())
+                .with(Type::FORMAT)
+                .as_data_format(),
+            Type::Array(..) => Format::data(self.ordinal())
+                .with(u16::FORMAT)
                 .with(Type::FORMAT)
                 .as_data_format(),
             _ => Format::data(self.ordinal()).as_data_format(),
@@ -482,6 +512,21 @@ impl Decodable for Type {
         }
 
         match header.format.ordinal {
+            Self::ARRAY_ORDINAL => {
+                // Array: blob_size=2 (u16 count), data_fields=1 (element Type).
+                if header.format.blob_size != 2 || header.format.data_fields != 1 {
+                    return UnexpectedDataFormatSnafu {
+                        expected: Self::FORMAT,
+                        actual: Some(header),
+                    }
+                    .fail();
+                }
+                let mut count = 0u16;
+                reader.read_data_into(&mut count)?;
+                let mut elem = Type::default();
+                reader.read_data_into(&mut elem)?;
+                *self = Type::Array(count, elem.into());
+            }
             Self::LIST_ORDINAL => {
                 // List: blob_size=0, data_fields=1 (inner Type).
                 if header.format.blob_size != 0 || header.format.data_fields != 1 {
@@ -911,6 +956,125 @@ mod tests {
         let decoded_data_type = encoded_data_type.as_slice().read_data().unwrap();
 
         assert_eq!(data_type, decoded_data_type);
+    }
+
+    #[test]
+    fn array_type_codec() {
+        // Array types round-trip through the Type codec,
+        // preserving their count and element type.
+        let typing = Type::Array(4096, Type::U8.into());
+        let mut encoded = vec![];
+        encoded.write_data(&typing).unwrap();
+        let decoded: Type = encoded.as_slice().read_data().unwrap();
+        assert_eq!(typing, decoded);
+
+        // Nested arrays round-trip, too.
+        let typing = Type::Array(3, Type::Array(3, Type::F32.into()).into());
+        assert_eq!(Format::Blob(36), typing.format());
+        let mut encoded = vec![];
+        encoded.write_data(&typing).unwrap();
+        let decoded: Type = encoded.as_slice().read_data().unwrap();
+        assert_eq!(typing, decoded);
+
+        // Data types containing array fields round-trip, too.
+        let data_type = DataType::new(Text::from("Blobby"), None, 1, &[], &[]).with(DataField {
+            name: Text::from("hash"),
+            docs: None,
+            typing: Type::Array(32, Type::U8.into()),
+            optional: false,
+            flattened: false,
+        });
+        assert_eq!(Format::data(1).with(Format::Blob(32)), *data_type.format());
+
+        let mut encoded = vec![];
+        encoded.write_data(&data_type).unwrap();
+        let decoded: DataType = encoded.as_slice().read_data().unwrap();
+        assert_eq!(data_type, decoded);
+    }
+
+    /// Sample data structure containing a fixed-size array
+    /// field, mirroring the code generated for a coda with
+    /// an `array of 16 u8` field.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct BlobTestData {
+        id: u32,
+        hash: Array<u8, 16>,
+        text: Text,
+    }
+
+    impl Encodable for BlobTestData {
+        const FORMAT: Format = Format::data(1)
+            .with(u32::FORMAT)
+            .with(Array::<u8, 16>::FORMAT)
+            .with(Text::FORMAT);
+
+        fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
+            writer.write_data(&self.id)?;
+            writer.write_data(&self.hash)?;
+            writer.write_data(&self.text)?;
+            Ok(())
+        }
+    }
+
+    impl Decodable for BlobTestData {
+        fn decode(
+            &mut self,
+            reader: &mut (impl ReadsDecodable + ?Sized),
+            header: Option<DataHeader>,
+        ) -> Result<(), CodecError> {
+            let _ = Self::ensure_header(header, &[1])?;
+            reader.read_data_into(&mut self.id)?;
+            reader.read_data_into(&mut self.hash)?;
+            reader.read_data_into(&mut self.text)?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn blob_fields_encode_into_blob_section() {
+        // The blob field contributes to the data's blob
+        // section instead of its data fields.
+        assert_eq!(
+            Format::Data(DataFormat {
+                blob_size: 4 + 16,
+                data_fields: 1,
+                ordinal: 1,
+            }),
+            BlobTestData::FORMAT
+        );
+
+        let data = BlobTestData {
+            id: 9001,
+            hash: Array([7; 16]),
+            text: "blobby!".into(),
+        };
+        let mut encoded = vec![];
+        encoded.write_data(&data).unwrap();
+
+        // Wire layout: header(8) + id(4) + hash(16) +
+        // text header(8) + text bytes.
+        assert_eq!(8 + 4 + 16 + 8 + data.text.len(), encoded.len());
+
+        // The hash's bytes are stored raw in the blob
+        // section, with no header, directly after `id`.
+        assert_eq!(&[7; 16], &encoded[12..28]);
+
+        let decoded: BlobTestData = encoded.as_slice().read_data().unwrap();
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn blob_field_lists_encode_homogeneously() {
+        // Lists of fixed-size byte arrays encode as a
+        // single header followed by tightly-packed
+        // elements (stride = the array size).
+        let list: Vec<[u8; 4]> = vec![[1; 4], [2; 4], [3; 4]];
+        let mut encoded = vec![];
+        encoded.write_data(&list).unwrap();
+        assert_eq!(8 + 3 * 4, encoded.len());
+
+        let decoded: Vec<[u8; 4]> = encoded.as_slice().read_data().unwrap();
+        assert_eq!(list, decoded);
     }
 
     #[test]

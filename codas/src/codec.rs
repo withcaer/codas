@@ -412,7 +412,7 @@ pub struct DataFormat {
     /// is unspecified.
     ///
     /// Built-in types count down from 255; user-defined
-    /// types count up from 1, giving ~241 user ordinals
+    /// types count up from 1, giving ~240 user ordinals
     /// per coda.
     pub ordinal: u8,
 }

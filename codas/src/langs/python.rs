@@ -181,6 +181,10 @@ fn python_default_val(typing: &Type) -> Text {
         Type::F64 => Text::Static("0.0"),
         Type::Bool => Text::Static("False"),
         Type::Text => Text::Static("\"\""),
+        Type::Array(count, elem) => {
+            let elem_default = python_default_val(elem);
+            format!("[{elem_default}] * {count}").into()
+        }
         Type::Data(typing) => format!("{}()", typing.name.trim()).into(),
         Type::List(_) => Text::Static("[]"),
         Type::Map(_) => Text::Static("{}"),
@@ -229,6 +233,12 @@ fn python_type_check(typing: &Type) -> Option<Text> {
         )),
         Type::Bool => None,
         Type::Text => None,
+        Type::Array(count, _) => Some(
+            format!(
+                "if len(value) != {count}: raise ValueError(\"array must have exactly {count} elements\")"
+            )
+            .into(),
+        ),
         Type::Data(_) => None,
         Type::List(_) => None,
         Type::Map(_) => None,
@@ -255,6 +265,10 @@ fn python_type(typing: &Type) -> Text {
         Type::F64 => Text::Static("float"),
         Type::Bool => Text::Static("bool"),
         Type::Text => Text::Static("str"),
+        Type::Array(_, elem) => {
+            let elem = python_type(elem.as_ref());
+            format!("list[{elem}]").into()
+        }
         Type::Data(typing) => typing.name.clone(),
         Type::List(typing) => {
             let typing = python_type(typing.as_ref());

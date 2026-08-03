@@ -81,6 +81,13 @@ fn duckdb_type(typing: &Type) -> Text {
         Type::F64 => Text::Static("DOUBLE"),
         Type::Bool => Text::Static("BOOLEAN"),
         Type::Text => Text::Static("VARCHAR"),
+        // Byte arrays are semantically opaque tokens (hashes, keys, signatures),
+        // and BLOB gives them scalar comparison and grouping semantics, which nested arrays lack.
+        Type::Array(_, elem) if **elem == Type::U8 => Text::Static("BLOB"),
+        Type::Array(count, elem) => {
+            let elem = duckdb_type(elem);
+            format!("{elem}[{count}]").into()
+        }
         Type::Data(typing) => typing.name.clone(),
         Type::List(typing) => {
             let inner = duckdb_type(typing);
@@ -122,12 +129,15 @@ CREATE TYPE MyNestedDataType AS STRUCT (
 -- Data 2.
 CREATE TYPE MyDataType AS STRUCT (
   "integral_field" INTEGER,
+  "array_field" BLOB,
+  "matrix_field" FLOAT[3][3],
   "textual_field" VARCHAR,
   "nested_field" MyNestedDataType,
   "optional_field" UBIGINT,
   "3d_field" INTEGER[][][],
   "map_field" MAP(VARCHAR, INTEGER),
-  "unspecified_field" BLOB
+  "unspecified_field" BLOB,
+  "frames_field" FLOAT[3][]
 );"#
             .trim(),
             sql.trim()

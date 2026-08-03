@@ -23,22 +23,24 @@ use snafu::Snafu;
 
 use crate::{
     codec::{
-        CodecError, DataHeader, Decodable, Encodable, Format, ReadsDecodable,
-        UnexpectedDataFormatSnafu, WritesEncodable,
+        CodecError, DataHeader, Decodable, Encodable, Format, ReadsDecodable, WritesEncodable,
     },
     types::Text,
 };
 
 // Fixed-size `[u8; SIZE]` codec.
 impl<const SIZE: usize> Encodable for [u8; SIZE] {
-    /// Encoded as a [`Format::Data`] containing a
-    /// [`Format::Blob(SIZE)`](Format::Blob).
+    /// Encoded as a [`Format::Blob(SIZE)`](Format::Blob) containing the raw bytes.
+    ///
+    /// When a fixed-size byte array is a field of a
+    /// [`Format::Data`], its bytes are stored directly
+    /// in the data's blob section.
     const FORMAT: Format = {
         assert!(
             SIZE <= u16::MAX as usize,
             "SIZE exceeds maximum blob size (u16::MAX)"
         );
-        Format::data(0).with(Format::Blob(SIZE as u16))
+        Format::Blob(SIZE as u16)
     };
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
@@ -53,27 +55,187 @@ impl<const SIZE: usize> Decodable for [u8; SIZE] {
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let header = Self::ensure_header(header, &[0])?;
-
-        if header.count != 1
-            || header.format.blob_size != SIZE as u16
-            || header.format.data_fields != 0
-        {
-            return UnexpectedDataFormatSnafu {
-                expected: Self::FORMAT,
-                actual: Some(header),
-            }
-            .fail();
-        }
-
+        Self::ensure_no_header(header)?;
         reader.read_exact(self)?;
         Ok(())
     }
 }
 
+/// Fixed-size sequence of `N` values of a fixed-size type `T`.
+///
+/// This is a zero-cost (`#[repr(transparent)]`)
+/// wrapper around `[T; N]` which implements
+/// [`Default`] (and therefore the codec traits'
+/// container requirements) for _any_ `N`. Rust's
+/// standard library only implements `Default` for
+/// arrays of up to `32` elements, which would
+/// prevent types like `Option<[u8; 64]>` or
+/// `Vec<[u8; 64]>` from being decodable.
+///
+/// Code generated for codas with `array of N T`
+/// fields uses this type for those fields.
+#[repr(transparent)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Array<T, const N: usize>(pub [T; N]);
+
+impl<T, const N: usize> Array<T, N> {
+    /// The number of elements in this array.
+    pub const LEN: usize = N;
+}
+
+impl<const N: usize> Array<u8, N> {
+    /// Null ("empty") bytes initialized to `0`.
+    pub const NULL: Self = Self([0; N]);
+
+    /// Decodes a `hex` string into these bytes.
+    pub fn from_hex(&mut self, hex: &str) -> Result<(), BinaryError> {
+        fixed_bytes_from_hex(hex, &mut self.0)
+    }
+
+    /// Encodes a hex string from these bytes.
+    pub fn to_hex(&self) -> Text {
+        hex_from_bytes(&self.0)
+    }
+}
+
+impl<T: Default, const N: usize> Default for Array<T, N> {
+    fn default() -> Self {
+        Self(core::array::from_fn(|_| T::default()))
+    }
+}
+
+impl<T, const N: usize> From<[T; N]> for Array<T, N> {
+    fn from(values: [T; N]) -> Self {
+        Self(values)
+    }
+}
+
+impl<T, const N: usize> From<Array<T, N>> for [T; N] {
+    fn from(array: Array<T, N>) -> Self {
+        array.0
+    }
+}
+
+impl<T: Copy, const N: usize> TryFrom<&[T]> for Array<T, N> {
+    type Error = core::array::TryFromSliceError;
+
+    fn try_from(values: &[T]) -> Result<Self, Self::Error> {
+        <[T; N]>::try_from(values).map(Self)
+    }
+}
+
+impl<T, const N: usize> core::ops::Deref for Array<T, N> {
+    type Target = [T; N];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T, const N: usize> core::ops::DerefMut for Array<T, N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T, const N: usize> core::borrow::Borrow<[T; N]> for Array<T, N> {
+    fn borrow(&self) -> &[T; N] {
+        &self.0
+    }
+}
+
+impl<T, const N: usize> core::borrow::BorrowMut<[T; N]> for Array<T, N> {
+    fn borrow_mut(&mut self) -> &mut [T; N] {
+        &mut self.0
+    }
+}
+
+impl<T: PartialEq, const N: usize> PartialEq<[T; N]> for Array<T, N> {
+    fn eq(&self, other: &[T; N]) -> bool {
+        self.0 == *other
+    }
+}
+
+impl<T: PartialEq, const N: usize> PartialEq<Array<T, N>> for [T; N] {
+    fn eq(&self, other: &Array<T, N>) -> bool {
+        *self == other.0
+    }
+}
+
+impl<T: Debug, const N: usize> Debug for Array<T, N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Byte arrays display as lowercase hexadecimal.
+impl<const N: usize> core::fmt::Display for Array<u8, N> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        format_bytes_as_hex(f, &self.0)
+    }
+}
+
+impl<T: Encodable, const N: usize> Encodable for Array<T, N> {
+    /// Encoded as a [`Format::Blob`] containing each
+    /// element's encoding, in order, with no headers.
+    const FORMAT: Format = match T::FORMAT {
+        Format::Blob(size) => {
+            let total = size as usize * N;
+            assert!(
+                total <= u16::MAX as usize,
+                "array size exceeds maximum blob size (u16::MAX)"
+            );
+            Format::Blob(total as u16)
+        }
+        _ => panic!("array elements must have a fixed size"),
+    };
+
+    fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
+        for value in &self.0 {
+            value.encode(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl<T: Encodable + Decodable, const N: usize> Decodable for Array<T, N> {
+    fn decode(
+        &mut self,
+        reader: &mut (impl ReadsDecodable + ?Sized),
+        header: Option<DataHeader>,
+    ) -> Result<(), CodecError> {
+        Self::ensure_no_header(header)?;
+        for value in &mut self.0 {
+            value.decode(reader, None)?;
+        }
+        Ok(())
+    }
+}
+
+/// Serialized as a sequence of elements, matching
+/// serde's own representation of arrays.
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize, const N: usize> serde::Serialize for Array<T, N> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(&self.0)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de, T: serde::Deserialize<'de>, const N: usize> serde::Deserialize<'de> for Array<T, N> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        let values = alloc::vec::Vec::<T>::deserialize(deserializer)?;
+        let length = values.len();
+        <[T; N]>::try_from(values)
+            .map(Self)
+            .map_err(|_| D::Error::invalid_length(length, &"an array of length N"))
+    }
+}
+
 /// Macro which generates a [new type](https://doc.rust-lang.org/rust-by-example/generics/new_types.html)
-/// a struct wrapping a fixed-size `[u8]` array,
-/// enabling sype-safe sharing.
+/// struct wrapping a fixed-size `[u8]` array, enabling sype-safe sharing.
 #[macro_export]
 macro_rules! sized_byte_array {
     (
@@ -494,11 +656,77 @@ mod test {
         let value: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
         let mut encoded = vec![];
         encoded.write_data(&value).expect("encoded");
+
+        // Fixed-size arrays encode as raw blobs, with no header.
+        assert_eq!(value.len(), encoded.len());
+
         let mut decoded = [0u8; 8];
         encoded
             .as_slice()
             .read_data_into(&mut decoded)
             .expect("decoded");
+        assert_eq!(value, decoded);
+    }
+
+    #[test]
+    fn test_array_codec() {
+        // Arrays encode as headerless raw elements.
+        let value = Array([1u8, 2, 3, 4, 5, 6, 7, 8]);
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        assert_eq!(Array::<u8, 8>::LEN, encoded.len());
+        let decoded: Array<u8, 8> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        // Non-byte elements encode in order, each
+        // in little-endian, with no headers.
+        let value = Array([1.0f32, 2.0, 3.0]);
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        assert_eq!(12, encoded.len());
+        assert_eq!(&1.0f32.to_le_bytes(), &encoded[0..4]);
+        assert_eq!(&2.0f32.to_le_bytes(), &encoded[4..8]);
+        assert_eq!(&3.0f32.to_le_bytes(), &encoded[8..12]);
+        let decoded: Array<f32, 3> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        // Nested arrays are flattened raw bytes.
+        let value: Array<Array<f32, 3>, 3> =
+            Array([Array([1.0; 3]), Array([2.0; 3]), Array([3.0; 3])]);
+        assert_eq!(Format::Blob(36), Array::<Array<f32, 3>, 3>::FORMAT);
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        assert_eq!(36, encoded.len());
+        let decoded: Array<Array<f32, 3>, 3> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        // Arrays implement `Default` for any length,
+        // unlike raw `[T; N]` arrays (capped at 32).
+        let value: Array<u8, 64> = Array::default();
+        assert_eq!(value, [0u8; 64]);
+
+        // ...which makes optional arrays of any
+        // length decodable...
+        let value: Option<Array<u8, 64>> = Some(Array([42u8; 64]));
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        let decoded: Option<Array<u8, 64>> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        let value: Option<Array<u8, 64>> = None;
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        let decoded: Option<Array<u8, 64>> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        // ...along with lists of arrays of any length,
+        // which encode as tightly-packed elements
+        // after a single header.
+        let value: Vec<Array<f32, 3>> = vec![Array([1.0; 3]), Array([2.0; 3])];
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        assert_eq!(8 + 2 * 12, encoded.len());
+        let decoded: Vec<Array<f32, 3>> = encoded.as_slice().read_data().expect("decoded");
         assert_eq!(value, decoded);
     }
 

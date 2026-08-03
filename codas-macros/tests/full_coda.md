@@ -16,6 +16,11 @@ each of the built-in data types.
 + `num_9` f32
 + `num_10` f64
 + `boolean` bool
++ `checksum` array of 8 u8
++ `signature` array of 64 u8
++ `maybe_sig` optional array of 48 u8
++ `position` array of 3 f32
++ `waypoints` list of array of 3 f32
 + `message` text
 + `listing` list of text
 + `mapping` map of text to f32
