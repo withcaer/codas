@@ -57,7 +57,8 @@ fn batch_mode(command: CompileCommand) {
         Lang::Python,
         Lang::Typescript,
         Lang::OpenApi,
-        Lang::Sql,
+        Lang::Duckdb,
+        Lang::Sqlite,
     ];
 
     for lang in langs {
@@ -124,7 +125,8 @@ fn generate(coda: &Coda, lang: Lang, out: &mut impl std::io::Write) {
         Lang::Python => langs::python::generate_types(coda, out),
         Lang::Typescript => langs::typescript::generate_types(coda, out),
         Lang::OpenApi => langs::open_api::generate_spec(coda, out),
-        Lang::Sql => langs::sql::generate_types(coda, out),
+        Lang::Duckdb => langs::duckdb::generate_types(coda, out),
+        Lang::Sqlite => langs::sqlite::generate_types(coda, out),
     }
     .expect("failed to write output");
 }
@@ -137,7 +139,8 @@ impl Lang {
             Lang::Python => "python",
             Lang::Typescript => "typescript",
             Lang::OpenApi => "open-api",
-            Lang::Sql => "sql",
+            Lang::Duckdb => "duckdb",
+            Lang::Sqlite => "sqlite",
         }
     }
 
@@ -149,7 +152,8 @@ impl Lang {
             Lang::Python => format!("{snake}.py"),
             Lang::Typescript => format!("{snake}.ts"),
             Lang::OpenApi => format!("{snake}.yaml"),
-            Lang::Sql => format!("{snake}.sql"),
+            Lang::Duckdb => format!("{snake}.sql"),
+            Lang::Sqlite => format!("{snake}.sql"),
         }
     }
 }

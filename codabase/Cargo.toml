@@ -26,7 +26,7 @@ release = true
 all-features = true
 
 [dependencies]
-codas = { workspace = true, features = ["std", "parse", "langs-open-api", "langs-python", "langs-rust", "langs-sql", "langs-typescript"] }
+codas = { workspace = true, features = ["std", "parse", "langs-open-api", "langs-python", "langs-rust", "langs-duckdb", "langs-sqlite", "langs-typescript"] }
 codas-macros.workspace = true
 serde.workspace = true
 

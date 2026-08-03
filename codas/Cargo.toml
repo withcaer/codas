@@ -32,7 +32,8 @@ all-features = true
 # Enable language-specific code generation
 langs = ["dep:indoc"]
 langs-open-api = ["langs"]
-langs-sql = ["langs"]
+langs-duckdb = ["langs"]
+langs-sqlite = ["langs"]
 langs-typescript = ["langs"]
 langs-python = ["langs"]
 langs-rust = ["langs"]

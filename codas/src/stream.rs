@@ -141,7 +141,8 @@ pub trait Writes {
 #[cfg_attr(
     not(any(
         feature = "langs-python",
-        feature = "langs-sql",
+        feature = "langs-duckdb",
+        feature = "langs-sqlite",
         feature = "langs-typescript",
         feature = "langs-open-api",
         test
