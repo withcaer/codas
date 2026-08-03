@@ -12,7 +12,7 @@ keywords = [
 ]
 readme = "README.md"
 license = "FSL-1.1-MIT"
-version = "0.2.1"
+version = "0.2.2"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true

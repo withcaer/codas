@@ -23,9 +23,9 @@ authors = [
 # workspace-wide dependencies so
 # that they can be depended on by
 # any other workspace member.
-codas = { version = "0.7.1", path = "codas" }
-codas-macros = { version = "0.7.1", path = "codas-macros" }
-codas-flow = { version = "0.7.1", path = "codas-flow" }
+codas = { version = "0.7.2", path = "codas" }
+codas-macros = { version = "0.7.2", path = "codas-macros" }
+codas-flow = { version = "0.7.2", path = "codas-flow" }
 
 # Snafu is used for error handling instead
 # of Anyhow due to it's no-std support.

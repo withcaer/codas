@@ -329,7 +329,7 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
 name = "codabase"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "clap",
  "codas",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "codas"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "argon2",
  "blake3",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "codas-flow"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "codas",
  "criterion",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "codas-macros"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "codas",
  "codas-macros",
