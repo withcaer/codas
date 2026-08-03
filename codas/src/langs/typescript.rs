@@ -241,12 +241,37 @@ fn typescript_default_val(typing: &Type) -> Text {
         Type::F64 => Text::Static("0.0"),
         Type::Bool => Text::Static("false"),
         Type::Text => Text::Static("\"\""),
+        Type::Array(count, elem) => match typescript_typed_array(elem) {
+            Some(typed_array) => format!("new {typed_array}({count})").into(),
+            None => {
+                let elem_default = typescript_default_val(elem);
+                format!("Array.from({{ length: {count} }}, () => {elem_default})").into()
+            }
+        },
         Type::Data(typing) => {
             let name = &typing.name;
             format!("new {name}()").into()
         }
         Type::List(_) => Text::Static("[]"),
         Type::Map(_) => Text::Static("new Map()"),
+    }
+}
+
+/// Returns the native Typescript typed array
+/// corresponding to arrays of `elem`, if one exists.
+fn typescript_typed_array(elem: &Type) -> Option<&'static str> {
+    match elem {
+        Type::U8 => Some("Uint8Array"),
+        Type::I8 => Some("Int8Array"),
+        Type::U16 => Some("Uint16Array"),
+        Type::I16 => Some("Int16Array"),
+        Type::U32 => Some("Uint32Array"),
+        Type::I32 => Some("Int32Array"),
+        Type::U64 => Some("BigUint64Array"),
+        Type::I64 => Some("BigInt64Array"),
+        Type::F32 => Some("Float32Array"),
+        Type::F64 => Some("Float64Array"),
+        _ => None,
     }
 }
 
@@ -270,6 +295,13 @@ fn typescript_type(typing: &Type) -> Text {
         Type::F64 => Text::Static("number"),
         Type::Bool => Text::Static("boolean"),
         Type::Text => Text::Static("string"),
+        Type::Array(_, elem) => match typescript_typed_array(elem) {
+            Some(typed_array) => Text::Static(typed_array),
+            None => {
+                let elem = typescript_type(elem.as_ref());
+                format!("Array<{elem}>").into()
+            }
+        },
         Type::Data(typing) => typing.name.clone(),
         Type::List(typing) => {
             let typing = typescript_type(typing.as_ref());

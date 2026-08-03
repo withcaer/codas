@@ -390,6 +390,10 @@ fn get_rust_type(typing: &Type) -> Text {
         Type::F64 => Text::Static("f64"),
         Type::Bool => Text::Static("bool"),
         Type::Text => Text::Static("codas::types::Text"),
+        Type::Array(count, elem) => {
+            let elem = get_rust_type(elem.as_ref());
+            format!("codas::types::Array<{elem}, {count}>").into()
+        }
         Type::Data(typing) => typing.name.clone(),
         Type::List(typing) => {
             let typing = get_rust_type(typing.as_ref());

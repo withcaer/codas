@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::collections::BTreeMap;
 
-use codas::types::{Text, Unspecified};
+use codas::types::{Array, Text, Unspecified};
 use codas_macros::export_coda;
 use serde_json::json;
 
@@ -28,6 +28,11 @@ pub fn generated_types() {
         num_9: 3.33f32,
         num_10: 3.33f64,
         boolean: true,
+        checksum: Array([1, 2, 3, 4, 5, 6, 7, 8]),
+        signature: Array([9u8; 64]),
+        maybe_sig: Some(Array([7u8; 48])),
+        position: Array([1.0f32, 2.0, 3.0]),
+        waypoints: vec![Array([0.0f32; 3])],
         message: Text::from("Hello!"),
         listing: vec![],
         mapping: BTreeMap::default(),
@@ -59,6 +64,55 @@ pub fn generated_types() {
     });
 
     assert_eq!(expected_json, nesting_json);
+}
+
+/// Tests that array fields round-trip through both the binary codec and serde.
+#[test]
+pub fn array_fields_round_trip() {
+    use codas::codec::{ReadsDecodable, WritesEncodable};
+
+    // Array fields default to zeroed values, even
+    // for arrays longer than 32 elements.
+    let example = Example::default();
+    assert_eq!(Array::NULL, example.checksum);
+    assert_eq!(Array::NULL, example.signature);
+    assert_eq!(None, example.maybe_sig);
+    assert_eq!(Array([0.0f32; 3]), example.position);
+    assert!(example.waypoints.is_empty());
+
+    let example = Example {
+        checksum: Array([1, 2, 3, 4, 5, 6, 7, 8]),
+        signature: Array([42u8; 64]),
+        maybe_sig: Some(Array([7u8; 48])),
+        position: Array([1.5f32, -2.5, 3.5]),
+        waypoints: vec![Array([1.0f32; 3]), Array([2.0f32; 3])],
+        ..Default::default()
+    };
+
+    // Round-trip through the binary codec.
+    let mut encoded = vec![];
+    encoded.write_data(&example).unwrap();
+    let decoded: Example = encoded.as_slice().read_data().unwrap();
+    assert_eq!(example, decoded);
+
+    // Absent optional arrays round-trip as None.
+    let example_without_sig = Example {
+        maybe_sig: None,
+        ..example.clone()
+    };
+    let mut encoded = vec![];
+    encoded.write_data(&example_without_sig).unwrap();
+    let decoded: Example = encoded.as_slice().read_data().unwrap();
+    assert_eq!(example_without_sig, decoded);
+
+    // Round-trip through serde JSON.
+    let json_value = serde_json::to_value(&example).unwrap();
+    assert_eq!(json_value["checksum"], json!([1, 2, 3, 4, 5, 6, 7, 8]));
+    assert_eq!(json_value["signature"], json!(vec![42u8; 64]));
+    assert_eq!(json_value["maybe_sig"], json!(vec![7u8; 48]));
+    assert_eq!(json_value["position"], json!([1.5f32, -2.5, 3.5]));
+    let roundtripped: Example = serde_json::from_value(json_value).unwrap();
+    assert_eq!(example, roundtripped);
 }
 
 /// Tests that `map of text to unspecified` fields
@@ -151,6 +205,11 @@ pub fn unspecified_map_from_arbitrary_json() {
             "num_5": 0, "num_6": 0, "num_7": 0, "num_8": 0,
             "num_9": 0.0, "num_10": 0.0,
             "boolean": false,
+            "checksum": [0, 0, 0, 0, 0, 0, 0, 0],
+            "signature": vec![0u8; 64],
+            "maybe_sig": null,
+            "position": [0.0, 0.0, 0.0],
+            "waypoints": [],
             "message": "",
             "listing": [],
             "mapping": {},

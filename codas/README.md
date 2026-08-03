@@ -30,8 +30,10 @@ kinds of fields:
    (`f32` and `f64`).
 4. Booleans (`bool`).
 5. UTF-8 encoded text (`text`).
-6. _Other_ user-defined data types ("nested" data)
-7. Lists of any of the things listed above.
+6. Fixed-size arrays of any fixed-size type
+   (`array of N u8`, `array of N f32`, and so on).
+7. _Other_ user-defined data types ("nested" data)
+8. Lists of any of the things listed above.
 
 For information on how codas' data is coded to and
 from binary data, refer to the [`codec`](https://docs.rs/codas/latest/codas/codec) docs.

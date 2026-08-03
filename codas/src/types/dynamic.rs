@@ -104,6 +104,26 @@ impl Unspecified {
             Type::F64 => Unspecified::F64(0.0),
             Type::Bool => Unspecified::Bool(false),
             Type::Text => Unspecified::Text(Text::default()),
+            // Arrays are represented as unspecified data
+            // containing their raw (zeroed) bytes.
+            Type::Array(..) => {
+                let size = match typing.format() {
+                    crate::codec::Format::Blob(size) => size,
+                    _ => unreachable!("arrays always have blob formats"),
+                };
+
+                Unspecified::Data {
+                    header: DataHeader {
+                        count: 1,
+                        format: crate::codec::DataFormat {
+                            blob_size: size,
+                            data_fields: 0,
+                            ordinal: 0,
+                        },
+                    },
+                    raw: alloc::vec![0; size as usize],
+                }
+            }
             Type::Data(typing) => Unspecified::Data {
                 header: DataHeader {
                     count: 0,
