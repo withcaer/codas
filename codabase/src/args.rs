@@ -80,7 +80,8 @@ pub enum Lang {
     Python,
     Typescript,
     OpenApi,
-    Sql,
+    Duckdb,
+    Sqlite,
 }
 
 /// Arguments passed to [Command::Inspect].

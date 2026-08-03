@@ -1,7 +1,6 @@
 //! ## Unstable
 //!
-//! SQL code generators for codas, with a focus
-//! on supporting the DuckDB SQL dialect.
+//! [DuckDB](https://duckdb.org/) SQL code generators for codas.
 
 use core::fmt::Write;
 
@@ -89,6 +88,9 @@ fn duckdb_type(typing: &Type) -> Text {
             format!("{elem}[{count}]").into()
         }
         Type::Data(typing) => typing.name.clone(),
+        // Like byte arrays, byte lists are semantically opaque payloads,
+        // and BLOB is variable-length, matching the list's semantics exactly.
+        Type::List(typing) if **typing == Type::U8 => Text::Static("BLOB"),
         Type::List(typing) => {
             let inner = duckdb_type(typing);
             format!("{}[]", inner).into()
@@ -142,5 +144,25 @@ CREATE TYPE MyDataType AS STRUCT (
             .trim(),
             sql.trim()
         );
+    }
+
+    #[test]
+    fn byte_sequences_are_blobs() {
+        // Byte arrays and byte lists are both opaque
+        // payloads: they map to BLOB, at any nesting depth.
+        assert_eq!("BLOB", duckdb_type(&Type::Array(32, Type::U8.into())));
+        assert_eq!("BLOB", duckdb_type(&Type::List(Type::U8.into())));
+        assert_eq!(
+            "BLOB[]",
+            duckdb_type(&Type::List(Type::Array(32, Type::U8.into()).into()))
+        );
+        assert_eq!(
+            "BLOB[]",
+            duckdb_type(&Type::List(Type::List(Type::U8.into()).into()))
+        );
+
+        // Non-byte elements keep native array/list types.
+        assert_eq!("FLOAT[3]", duckdb_type(&Type::Array(3, Type::F32.into())));
+        assert_eq!("USMALLINT[]", duckdb_type(&Type::List(Type::U16.into())));
     }
 }
