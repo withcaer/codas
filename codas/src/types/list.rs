@@ -8,9 +8,8 @@ use crate::codec::{
 };
 
 impl Encodable for [u8] {
-    /// Encoded as a sequence of [`Format::Data`],
-    /// each containing a single [`u8`] from the slice.
-    const FORMAT: Format = Format::data(0).with(Format::Blob(1));
+    /// Encoded as a [`Format::Sequence`] of [`u8`]s.
+    const FORMAT: Format = u8::FORMAT.as_sequence();
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
         writer.write_all(self)?;
@@ -37,15 +36,14 @@ impl<T> Encodable for Vec<T>
 where
     T: Encodable + 'static,
 {
-    /// Encoded as a sequence of [`Format::Data`], each
-    /// containing a single `T` from the vector.
+    /// Encoded as a [`Format::Sequence`] of `T`s.
     ///
     /// A `Vec<u8>` has the same encoding as a `[u8]`.
-    const FORMAT: Format = Format::data(0).with(T::FORMAT);
+    const FORMAT: Format = T::FORMAT.as_sequence();
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
         for item in self {
-            writer.write_data(item)?;
+            writer.write_sequence_data(item)?;
         }
 
         Ok(())
@@ -72,7 +70,7 @@ where
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let header = Self::ensure_header(header, &[0])?;
+        let header = Self::ensure_header(header)?;
 
         // To mitigate repeat allocations, reserve
         // space for any elements in excess of this
@@ -91,7 +89,7 @@ where
             }
             let item = item.unwrap();
 
-            reader.read_data_into(item)?;
+            reader.read_next_data_into(header, item)?;
         }
 
         self.truncate(count);
@@ -103,14 +101,14 @@ where
 #[cfg(test)]
 mod test {
     use crate::{
-        codec::{Encodable, Format, ReadsDecodable, WritesEncodable},
+        codec::{DataFormat, Encodable, Format, ReadsDecodable, WritesEncodable},
         types::Text,
     };
 
     #[test]
     fn codes_u8_slices() {
         assert_eq!(<[u8]>::FORMAT, <Vec<u8>>::FORMAT);
-        assert_eq!(Format::data(0).with(Format::Blob(1)), <Vec<u8>>::FORMAT);
+        assert_eq!(Format::Blob(1).as_sequence(), <Vec<u8>>::FORMAT);
 
         let value = &[8u8, 3, 7][..];
         let mut encoded = vec![];
@@ -121,11 +119,12 @@ mod test {
 
     #[test]
     fn codes_unstructured_vecs() {
-        assert_eq!(Format::data(0).with(Format::Blob(4)), <Vec<u32>>::FORMAT);
+        assert_eq!(Format::Blob(4).as_sequence(), <Vec<u32>>::FORMAT);
 
         let value = vec![7u32, 8, 9];
         let mut encoded = vec![];
         encoded.write_data(&value).expect("encoded");
+        assert_eq!(8 + 3 * 4, encoded.len(), "scalars are packed");
         let decoded: Vec<u32> = encoded.as_slice().read_data().expect("decoded");
         assert_eq!(value, decoded);
     }
@@ -133,14 +132,37 @@ mod test {
     #[test]
     fn codes_structured_vecs() {
         assert_eq!(
-            Format::data(0).with(Format::data(0).with(Format::Blob(1))),
+            Format::Sequence(DataFormat {
+                blob_size: 0,
+                data_fields: 1,
+                ordinal: 0
+            }),
             <Vec<Text>>::FORMAT
         );
 
         let value = vec![Text::from("Hello, world!")];
         let mut encoded = vec![];
         encoded.write_data(&value).expect("encoded");
+        assert_eq!(8 + 8 + 13, encoded.len(), "text is prefixed");
         let decoded: Vec<Text> = encoded.as_slice().read_data().expect("decoded");
         assert_eq!(value, decoded);
+    }
+
+    #[test]
+    fn empty_vecs_keep_their_format() {
+        let value: Vec<Text> = vec![];
+        let mut encoded = vec![];
+        encoded.write_data(&value).expect("encoded");
+        assert_eq!(
+            [0, 0, 0, 0, 0, 0, 1, 0],
+            encoded.as_slice(),
+            "empty sequences carry their data's format"
+        );
+        let decoded: Vec<Text> = encoded.as_slice().read_data().expect("decoded");
+        assert_eq!(value, decoded);
+
+        // An all-zero header denotes _absence_, not an empty list.
+        let zeroed = [0u8; 8];
+        assert!(zeroed.as_slice().read_data::<Vec<Text>>().is_err());
     }
 }

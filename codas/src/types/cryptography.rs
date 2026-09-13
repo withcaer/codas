@@ -14,7 +14,7 @@ use rand_core::OsRng;
 use snafu::Snafu;
 
 use crate::{
-    codec::{CodecError, Decodable, Encodable, Format, WritesEncodable},
+    codec::{CodecError, Decodable, Encodable, FieldReader, Format, WritesEncodable},
     sized_byte_array,
     stream::Writes,
     types::binary::hex_from_bytes,
@@ -452,10 +452,11 @@ impl Decodable for EncryptedData {
         reader: &mut (impl crate::codec::ReadsDecodable + ?Sized),
         header: Option<crate::codec::DataHeader>,
     ) -> Result<(), CodecError> {
-        Self::ensure_header(header, &[0])?;
-        reader.read_data_into(&mut self.nonce)?;
-        reader.read_data_into(&mut self.data)?;
-        Ok(())
+        let header = Self::ensure_header(header)?;
+        let mut fields = FieldReader::new(reader, header);
+        fields.read(&mut self.nonce)?;
+        fields.read(&mut self.data)?;
+        fields.finish()
     }
 }
 

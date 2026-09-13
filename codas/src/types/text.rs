@@ -10,10 +10,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 
-use crate::codec::{
-    CodecError, DataHeader, Decodable, Encodable, Format, UnexpectedDataFormatSnafu,
-    WritesEncodable,
-};
+use crate::codec::{CodecError, DataHeader, Decodable, Encodable, Format, WritesEncodable};
 
 /// UTF-8 encoded text data.
 ///
@@ -115,16 +112,7 @@ impl Decodable for Text {
         reader: &mut (impl crate::codec::ReadsDecodable + ?Sized),
         header: Option<crate::codec::DataHeader>,
     ) -> Result<(), crate::codec::CodecError> {
-        let header = Self::ensure_header(header, &[0])?;
-
-        // Text is always blob_size=1, data_fields=0.
-        if header.format.blob_size != 1 || header.format.data_fields != 0 {
-            return UnexpectedDataFormatSnafu {
-                expected: Self::FORMAT,
-                actual: Some(header),
-            }
-            .fail();
-        }
+        let header = Self::ensure_header(header)?;
 
         match self {
             Text::Static(_) => {
@@ -190,14 +178,11 @@ fn try_decode_string(
             return Err(e);
         }
 
-        // Validate the bytes.
+        // Validate the bytes, never leaving the
+        // string holding invalid UTF-8.
         if alloc::str::from_utf8(bytes).is_err() {
             bytes.clear();
-
-            // FIXME: If a string contains malformed UTF-8 bytes,
-            //        should decoding fail? Or should the string
-            //        be silently interpreted as empty data, which
-            //        could lead to data loss?
+            return Err(CodecError::InvalidUtf8);
         }
     }
 

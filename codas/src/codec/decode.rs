@@ -3,7 +3,9 @@ use snafu::ensure;
 
 use crate::stream::Reads;
 
-use super::{encode::Encodable, CodecError, DataFormat, DataHeader, UnexpectedDataFormatSnafu};
+use super::{
+    encode::Encodable, CodecError, DataFormat, DataHeader, Format, UnexpectedDataFormatSnafu,
+};
 
 /// Default size used for temporary,
 /// stack-allocated buffers.
@@ -29,16 +31,17 @@ pub trait Decodable: Encodable {
         header: Option<DataHeader>,
     ) -> Result<(), CodecError>;
 
-    /// Returns `Ok(header)` iff `header` exists
-    /// and matches one of `suppported_ordinals`.
+    /// Returns `Ok(header)` iff `header` exists and
+    /// matches `Self`'s [`Encodable::FORMAT`].
+    ///
+    /// Formats with a non-zero ordinal must match
+    /// the `header`'s ordinal, anonymous formats
+    /// must match `header` entirely, and fluid
+    /// formats match any header.
+    ///
+    /// [`Format::Data`] headers must have a `count` of `1`.
     #[inline(always)]
-    fn ensure_header(
-        header: Option<DataHeader>,
-        supported_ordinals: &[u8],
-    ) -> Result<DataHeader, CodecError> {
-        use super::UnsupportedDataFormatSnafu;
-
-        // Extract header data.
+    fn ensure_header(header: Option<DataHeader>) -> Result<DataHeader, CodecError> {
         let header = header.ok_or_else(|| {
             UnexpectedDataFormatSnafu {
                 expected: Self::FORMAT,
@@ -47,11 +50,28 @@ pub trait Decodable: Encodable {
             .build()
         })?;
 
-        // Validate ordinals.
+        let matches = match Self::FORMAT {
+            Format::Fluid => true,
+            Format::Blob(_) => false,
+            Format::Data(expected) | Format::Sequence(expected) => {
+                if expected.ordinal != 0 {
+                    header.format.ordinal == expected.ordinal
+                } else {
+                    header.format == expected
+                }
+            }
+        };
         ensure!(
-            supported_ordinals.contains(&header.format.ordinal),
-            UnsupportedDataFormatSnafu {
-                ordinal: header.format.ordinal
+            matches,
+            UnexpectedDataFormatSnafu {
+                expected: Self::FORMAT,
+                actual: Some(header),
+            }
+        );
+        ensure!(
+            !matches!(Self::FORMAT, Format::Data(_)) || header.count == 1,
+            super::UnsupportedCountSnafu {
+                count: header.count
             }
         );
 
@@ -135,6 +155,26 @@ pub trait ReadsDecodable {
         Ok(())
     }
 
+    /// Reads and decodes one sequence of `data` within a greater
+    /// sequence with `header`, per [`Format::as_sequence`].
+    fn read_next_data_into<T: Decodable>(
+        &mut self,
+        header: DataHeader,
+        data: &mut T,
+    ) -> Result<(), CodecError> {
+        match T::FORMAT {
+            Format::Blob(_) => data.decode(self, None),
+            Format::Data(_) => data.decode(
+                self,
+                Some(DataHeader {
+                    count: 1,
+                    format: header.format,
+                }),
+            ),
+            Format::Sequence(_) | Format::Fluid => self.read_data_into(data),
+        }
+    }
+
     /// Skips to the end of the next `length` bytes of data.
     fn skip_blob(&mut self, length: usize) -> Result<(), CodecError> {
         let mut skipped = 0;
@@ -190,6 +230,145 @@ pub trait ReadsDecodable {
         }
 
         Ok(read)
+    }
+}
+
+/// [`Format::Data`] field decoder.
+///
+/// Fields must be read in their encoded order, which means
+/// that every fixed-size "blob" field must be read in-order,
+/// followed by every structured "data" field in-order.
+///
+/// This decoder reconciles fields known to the decoder
+/// with the actual fields in a decoded data's [`DataHeader`]:
+///
+/// - Known fields present in the header are decoded.
+/// - Known fields missing from the header are "decoded"
+///   as their default values.
+/// - Unknown fields present in the header are skipped
+///   when [`FieldReader::finish`] is called.
+///
+/// Here's an example:
+///
+/// ```rust
+/// # use codas::codec::*;
+/// # use codas::types::Text;
+///
+/// /// Example data.
+/// #[derive(Default)]
+/// struct Data { number: u32, text: Text }
+///
+/// impl Encodable for Data {
+///     const FORMAT: Format = Format::data(1).with(u32::FORMAT).with(Text::FORMAT);
+///     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
+///
+///         // Encode the `number` then the `text`.
+///         writer.write_data(&self.number)?;
+///         writer.write_data(&self.text)
+///     }
+/// }
+///
+/// impl Decodable for Data {
+///     fn decode(
+///         &mut self,
+///         reader: &mut (impl ReadsDecodable + ?Sized),
+///         header: Option<DataHeader>,
+///     ) -> Result<(), CodecError> {
+///
+///         // Verify the header is valid.
+///         let header = Self::ensure_header(header)?;
+///         let mut fields = FieldReader::new(reader, header);
+///
+///         // Decode the `number` then the `text`.
+///         fields.read(&mut self.number)?;
+///         fields.read(&mut self.text)?;
+///
+///         // Finish decoding, skipping any unknown fields.
+///         fields.finish()
+///     }
+/// }
+/// ```
+#[must_use = "call `finish` to skip any fields unknown to the decoder"]
+pub struct FieldReader<'a, R: ReadsDecodable + ?Sized> {
+    reader: &'a mut R,
+
+    /// Blob bytes in the header that haven't been read.
+    blob_remaining: u16,
+
+    /// Structured fields in the header that haven't been read.
+    data_remaining: u8,
+
+    /// True once a structured field has been read,
+    /// after which no blob fields may be read.
+    reading_data: bool,
+}
+
+impl<'a, R: ReadsDecodable + ?Sized> FieldReader<'a, R> {
+    /// Begins reading the fields of a single data
+    /// with `header` from `reader`.
+    ///
+    /// `header` should be validated by
+    /// [`Decodable::ensure_header`] first.
+    pub fn new(reader: &'a mut R, header: DataHeader) -> Self {
+        Self {
+            reader,
+            blob_remaining: header.format.blob_size,
+            data_remaining: header.format.data_fields,
+            reading_data: false,
+        }
+    }
+
+    /// Reads the next `field`, or sets it to its
+    /// default value if the header has no more fields
+    /// of its kind.
+    pub fn read<T: Decodable + Default>(&mut self, field: &mut T) -> Result<(), CodecError> {
+        match T::FORMAT {
+            Format::Blob(size) => {
+                debug_assert!(
+                    !self.reading_data,
+                    "blob fields must be read before structured fields"
+                );
+
+                if self.blob_remaining >= size {
+                    field.decode(self.reader, None)?;
+                    self.blob_remaining -= size;
+                } else if self.blob_remaining == 0 {
+                    *field = T::default();
+                } else {
+                    // A blob ending partway through a field is malformed.
+                    return Err(CodecError::MissingBlobLength {
+                        length: size - self.blob_remaining,
+                    });
+                }
+            }
+
+            Format::Data(_) | Format::Sequence(_) | Format::Fluid => {
+                self.reading_data = true;
+
+                if self.data_remaining > 0 {
+                    self.reader.read_data_into(field)?;
+                    self.data_remaining -= 1;
+                } else {
+                    *field = T::default();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Finish decoding, skipping any fields in the
+    /// header which weren't read.
+    pub fn finish(self) -> Result<(), CodecError> {
+        if self.blob_remaining > 0 {
+            self.reader.skip_blob(self.blob_remaining as usize)?;
+        }
+
+        for _ in 0..self.data_remaining {
+            self.reader.skip_data()?;
+        }
+
+        Ok(())
     }
 }
 

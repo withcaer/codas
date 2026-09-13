@@ -2,7 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::codec::{
-    CodecError, DataHeader, Decodable, Encodable, Format, ReadsDecodable,
+    CodecError, DataHeader, Decodable, Encodable, FieldReader, Format, ReadsDecodable,
     UnexpectedDataFormatSnafu, WritesEncodable,
 };
 
@@ -36,14 +36,18 @@ where
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let _ = Self::ensure_header(header, &[0])?;
+        let header = Self::ensure_header(header)?;
+        let mut fields = FieldReader::new(reader, header);
 
         // Reset the map.
         self.clear();
 
         // Collect all keys and values.
-        let keys: Vec<K> = reader.read_data()?;
-        let values: Vec<V> = reader.read_data()?;
+        let mut keys: Vec<K> = Vec::new();
+        fields.read(&mut keys)?;
+        let mut values: Vec<V> = Vec::new();
+        fields.read(&mut values)?;
+        fields.finish()?;
 
         // Reject mismatched lengths to avoid silent data loss from zip().
         if keys.len() != values.len() {
@@ -55,7 +59,7 @@ where
         }
 
         // Insert (key, value) pairs.
-        for (key, value) in keys.into_iter().zip(values.into_iter()) {
+        for (key, value) in keys.into_iter().zip(values) {
             self.insert(key, value);
         }
 

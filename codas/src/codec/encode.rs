@@ -52,6 +52,9 @@ pub trait Encodable {
         match Self::FORMAT {
             Format::Blob(_) => Ok(()),
             Format::Data(format) => DataHeader { count: 1, format }.encode(writer),
+            Format::Sequence(_) => {
+                unimplemented!("sequence formats must manually implement `encode_header`")
+            }
             Format::Fluid => {
                 unimplemented!("fluid formats must manually implement `encode_header`")
             }
@@ -89,6 +92,16 @@ pub trait WritesEncodable: Writes {
         data.encode(self)?;
 
         Ok(())
+    }
+
+    /// Encodes and writes a single `data` of a
+    /// sequence of `T`, per [`Format::as_sequence`].
+    fn write_sequence_data<T: Encodable + ?Sized>(&mut self, data: &T) -> Result<(), CodecError> {
+        if T::FORMAT.is_packed() {
+            data.encode(self)
+        } else {
+            self.write_data(data)
+        }
     }
 }
 

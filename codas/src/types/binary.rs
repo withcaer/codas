@@ -476,10 +476,7 @@ pub fn bytes_from_hex(hex: &str) -> Result<alloc::vec::Vec<u8>, BinaryError> {
 
 /// Lookup table for hexadecimal character codes.
 #[rustfmt::skip]
-static HEX_LUT: [u8; 16] = [
-    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7',
-    b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f',
-];
+static HEX_LUT: [u8; 16] = *b"0123456789abcdef";
 
 /// Returns a lowercase hexadecimal string encoded from `bytes`.
 pub fn hex_from_bytes(bytes: &[u8]) -> Text {
@@ -582,12 +579,7 @@ const BASE32_BITS_PER_CHAR: usize = 5;
 
 /// Lookup table for Base32 character codes.
 #[rustfmt::skip]
-static BASE32_LUT: [u8; 32] = [
-    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7',
-    b'8', b'9', b'A', b'B', b'C', b'D', b'E', b'F',
-    b'G', b'H', b'J', b'K', b'M', b'N', b'P', b'Q',
-    b'R', b'S', b'T', b'V', b'W', b'X', b'Y', b'Z',
-];
+static BASE32_LUT: [u8; 32] = *b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// Returns the index in [`BASE32_LUT`]
 /// corresponding to `character`.

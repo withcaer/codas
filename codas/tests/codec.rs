@@ -1,5 +1,6 @@
 #![cfg(test)]
 //! Integration tests of the codec over `std` IO sockets.
+extern crate alloc;
 
 use std::{
     net::{TcpListener, TcpStream},
@@ -67,118 +68,34 @@ pub fn test_codec_over_tcp() -> Result<(), CodecError> {
     Ok(())
 }
 
-// Auto-generated via: export_coda!("codas/tests/test_coda.md");
-const _: &str = "";
-#[doc = "Undocumented Coda. How could you? ;~;"]
-#[derive(Clone, Debug, PartialEq)]
-pub enum TestData {
-    #[doc = "Unspecified data."]
-    Unspecified(codas::types::Unspecified),
-    #[doc = "Undocumented Type. How could you? ;~;"]
-    TestMessage(self::TestMessage),
-}
-impl TestData {
-    #[doc = " This variant\'s ordinal in the coda."]
-    pub fn ordinal(&self) -> u8 {
-        match self {
-            Self::Unspecified(..) => 0,
-            Self::TestMessage(..) => 1,
-        }
-    }
-}
-impl codas::codec::Encodable for TestData {
-    const FORMAT: codas::codec::Format = codas::codec::Format::Fluid;
-    fn encode(
-        &self,
-        writer: &mut (impl codas::codec::WritesEncodable + ?Sized),
-    ) -> core::result::Result<(), codas::codec::CodecError> {
-        match self {
-            Self::Unspecified(data) => data.encode(writer),
-            Self::TestMessage(data) => data.encode(writer),
-        }
-    }
+/// Data types unknown to a coda decode as `Unspecified`.
+#[test]
+pub fn unknown_data_types_decode_as_unspecified() -> Result<(), CodecError> {
+    use codas::codec::{DataFormat, DataHeader};
 
-    fn encode_header(
-        &self,
-        writer: &mut (impl WritesEncodable + ?Sized),
-    ) -> Result<(), CodecError> {
-        match self {
-            Self::Unspecified(data) => data.encode_header(writer),
-            Self::TestMessage(data) => data.encode_header(writer),
-        }
-    }
+    // Encode data with an ordinal the `Test` coda doesn't define.
+    let mut bytes = vec![];
+    bytes.write_data(&DataHeader {
+        count: 1,
+        format: DataFormat {
+            blob_size: 4,
+            data_fields: 0,
+            ordinal: 2,
+        },
+    })?;
+    bytes.write_data(&7u32)?;
+
+    let decoded: TestData = bytes.as_slice().read_data()?;
+    assert!(matches!(
+        decoded,
+        TestData::Unspecified(codas::types::Unspecified::Data { .. })
+    ));
+
+    let mut re_encoded = vec![];
+    re_encoded.write_data(&decoded)?;
+    assert_eq!(bytes, re_encoded);
+
+    Ok(())
 }
-impl codas::codec::Decodable for TestData {
-    fn decode(
-        &mut self,
-        reader: &mut (impl codas::codec::ReadsDecodable + ?Sized),
-        header: Option<codas::codec::DataHeader>,
-    ) -> core::result::Result<(), codas::codec::CodecError> {
-        let header = Self::ensure_header(header, &[0, 1])?;
-        match header.format.ordinal {
-            0 => {
-                let mut data = codas::types::Unspecified::default();
-                data.decode(reader, Some(header))?;
-                *self = Self::Unspecified(data);
-                Ok(())
-            }
-            1 => {
-                let mut data = self::TestMessage::default();
-                data.decode(reader, Some(header))?;
-                *self = Self::TestMessage(data);
-                Ok(())
-            }
-            _ => panic!("internal error: entered unreachable code"),
-        }
-    }
-}
-impl core::default::Default for TestData {
-    fn default() -> TestData {
-        Self::Unspecified(codas::types::Unspecified::default())
-    }
-}
-#[doc = "Undocumented Type. How could you? ;~;"]
-#[derive(Default, Clone, Debug, PartialEq)]
-pub struct TestMessage {
-    pub number: i32,
-    pub text_list: Vec<codas::types::Text>,
-    pub text: codas::types::Text,
-}
-impl codas::codec::Encodable for TestMessage {
-    const FORMAT: codas::codec::Format = codas::codec::Format::data(1)
-        .with(<i32 as codas::codec::Encodable>::FORMAT)
-        .with(<Vec<codas::types::Text> as codas::codec::Encodable>::FORMAT)
-        .with(<codas::types::Text as codas::codec::Encodable>::FORMAT);
-    fn encode(
-        &self,
-        writer: &mut (impl codas::codec::WritesEncodable + ?Sized),
-    ) -> core::result::Result<(), codas::codec::CodecError> {
-        writer.write_data(&self.number)?;
-        writer.write_data(&self.text_list)?;
-        writer.write_data(&self.text)?;
-        Ok(())
-    }
-}
-impl codas::codec::Decodable for TestMessage {
-    fn decode(
-        &mut self,
-        reader: &mut (impl codas::codec::ReadsDecodable + ?Sized),
-        header: Option<codas::codec::DataHeader>,
-    ) -> core::result::Result<(), codas::codec::CodecError> {
-        let _ = Self::ensure_header(header, &[1])?;
-        reader.read_data_into(&mut self.number)?;
-        reader.read_data_into(&mut self.text_list)?;
-        reader.read_data_into(&mut self.text)?;
-        Ok(())
-    }
-}
-impl From<codas::types::Unspecified> for TestData {
-    fn from(data: codas::types::Unspecified) -> TestData {
-        TestData::Unspecified(data)
-    }
-}
-impl From<self::TestMessage> for TestData {
-    fn from(data: self::TestMessage) -> TestData {
-        TestData::TestMessage(data)
-    }
-}
+
+codas_macros::export_coda!("codas/tests/test_coda.md");

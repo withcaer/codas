@@ -107,15 +107,14 @@
 //! Type | Description
 //! -----|-----------
 //! `u32`| The number of data following the header; `0` for no data, `1` for one data, and so on.
-//! `u16`| The total size in bytes of the data's [`Format::Blob`] fields, defaulting to `0` (none).
-//! `u8` | The total number of the data's [`Format::Data`] fields, defaulting to `0` (none).
+//! `u16`| The total size in bytes of the data's unstructured [`Format::Blob`] fields, defaulting to `0` (none).
+//! `u8` | The total number of the data's structured ([`Format::Data`], [`Format::Sequence`], or [`Format::Fluid`]) fields, defaulting to `0` (none).
 //! `u8` | The ordinal of the data's type in its documentation, defaulting to `0` ("unspecified").
 //!
 //! Because each [`DataHeader`] contains a count
-//! of how many distinct sequences of data follow
-//! the header, the encoding is identical for an
-//! empty sequence of data, a single sequence of
-//! data, and a list of sequences of data.
+//! of how many data follow the header, the encoding
+//! is identical for an empty sequence of data, a
+//! single sequence of data, and a list of data.
 //!
 //! Data is not encoded with any additional metadata
 //! (e.g., field or type names). The [`DataHeader`]
@@ -141,11 +140,31 @@ pub enum Format {
     /// data with a fixed size in bytes.
     Blob(u16),
 
-    /// Structured sequence of data containing
-    /// [`Format::Blob`]s and/or other [`Format::Data`].
+    /// Structured sequence of exactly one data containing
+    /// [`Format::Blob`]s and/or other structured data.
+    ///
+    /// The [`DataHeader`] of data with this format
+    /// always has a `count` of `1`.
     Data(DataFormat),
 
-    /// [`Format::Data`] with an unspecified format.
+    /// Structured sequence of zero or more distinct
+    /// data laid out per [`Format::as_sequence`].
+    ///
+    /// The [`DataHeader`] of data with this format
+    /// has a `count` equal to the number of distinct
+    /// data in the sequence.
+    ///
+    /// When encoded, data with this format is
+    /// indistinguishable from a [`Format::Data`]
+    /// _except_ that valid data with this format may
+    /// have an encoded count of `0` or `> 1`.
+    ///
+    /// # Unstable
+    ///
+    /// The name of this variant may change in the future.
+    Sequence(DataFormat),
+
+    /// Structured sequence of data with an unspecified format.
     ///
     /// Data with this format may encode to and
     /// from several kinds of [`Format::Data`].
@@ -164,10 +183,44 @@ impl Format {
         })
     }
 
+    /// Returns the format of a sequence of data with this format.
+    ///
+    /// [`Format::Blob`] and [`Format::Data`] become a
+    /// [`Format::Sequence`] of _packed_ data.
+    ///
+    /// [`Format::Sequence`] and [`Format::Fluid`] become a
+    /// [`Format::Sequence`] of _prefixed_ data.
+    ///
+    /// Packed data are encoded back-to-back without
+    /// headers, while prefixed data are each preceded by
+    /// their own data header.
+    pub const fn as_sequence(self) -> Self {
+        match self {
+            Format::Blob(size) => Self::Sequence(DataFormat {
+                blob_size: size,
+                data_fields: 0,
+                ordinal: 0,
+            }),
+            Format::Data(format) => Self::Sequence(format),
+            Format::Sequence(_) | Format::Fluid => Self::Sequence(DataFormat {
+                blob_size: 0,
+                data_fields: 1,
+                ordinal: 0,
+            }),
+        }
+    }
+
     /// Returns true iff `self` is a structured
-    /// data format (i.e., [`Format::Data`] or [`Format::Fluid`]).
+    /// data format (i.e., [`Format::Data`],
+    /// [`Format::Sequence`], or [`Format::Fluid`]).
     pub const fn is_structured(self) -> bool {
-        matches!(self, Self::Data(..) | Self::Fluid)
+        matches!(self, Self::Data(..) | Self::Sequence(..) | Self::Fluid)
+    }
+
+    /// Returns true iff data with this format are
+    /// packed into sequences, per [`Format::as_sequence`].
+    pub const fn is_packed(self) -> bool {
+        matches!(self, Self::Blob(..) | Self::Data(..))
     }
 
     /// Returns a new `self` containing additional
@@ -187,16 +240,16 @@ impl Format {
                 Self::Blob(f1 + f2)
             }
 
-            // Adding data to a blob yields data containing
-            // the blob and a single data field.
-            (Format::Blob(size), Format::Data(_)) | (Format::Blob(size), Format::Fluid) => {
-                DataFormat {
-                    blob_size: size,
-                    data_fields: 1,
-                    ordinal: 0,
-                }
-                .as_format()
+            // Adding structured data to a blob yields data
+            // containing the blob and a single data field.
+            (Format::Blob(size), Format::Data(_))
+            | (Format::Blob(size), Format::Sequence(_))
+            | (Format::Blob(size), Format::Fluid) => DataFormat {
+                blob_size: size,
+                data_fields: 1,
+                ordinal: 0,
             }
+            .as_format(),
 
             // Adding blobs to data yields the same data,
             // with a bigger blob.
@@ -213,9 +266,11 @@ impl Format {
                 .as_format()
             }
 
-            // Adding data to data yields the same data,
-            // with more data fields.
-            (Format::Data(format), Format::Data(_)) | (Format::Data(format), Format::Fluid) => {
+            // Adding structured data to data yields the
+            // same data, with more data fields.
+            (Format::Data(format), Format::Data(_))
+            | (Format::Data(format), Format::Sequence(_))
+            | (Format::Data(format), Format::Fluid) => {
                 assert!(
                     (format.data_fields as u16) < u8::MAX as u16,
                     "data fields overflow in Format::with"
@@ -228,10 +283,13 @@ impl Format {
                 .as_format()
             }
 
+            // Sequences don't have fields of their own.
+            (Format::Sequence(_), _) => {
+                panic!("fields can't be added to a sequence format; add them to the inner data instead")
+            }
+
             // Adding anything to a fluid format does nothing.
-            (Format::Fluid, Format::Blob(_))
-            | (Format::Fluid, Format::Data(_))
-            | (Format::Fluid, Format::Fluid) => Format::Fluid,
+            (Format::Fluid, _) => Format::Fluid,
         }
     }
 
@@ -246,8 +304,8 @@ impl Format {
                 ordinal: 0,
             },
 
-            // Data are returned as-is.
-            Format::Data(format) => format,
+            // Data and sequences are returned as-is.
+            Format::Data(format) | Format::Sequence(format) => format,
 
             // Fluids are returned as unspecified data
             // containing a single, unspecified data field.
@@ -273,7 +331,7 @@ impl Format {
                 Ok(())
             }
 
-            Format::Data(..) | Format::Fluid => Ok(()),
+            Format::Data(..) | Format::Sequence(..) | Format::Fluid => Ok(()),
         }
     }
 
@@ -285,7 +343,7 @@ impl Format {
         match self {
             Format::Blob(..) => Ok(()),
 
-            Format::Data(format) => DataHeader {
+            Format::Data(format) | Format::Sequence(format) => DataHeader {
                 count: 0,
                 format: *format,
             }
@@ -310,7 +368,7 @@ impl Encodable for Format {
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
         match self {
             Format::Blob(size) => writer.write_data(size),
-            Format::Data(format) => {
+            Format::Data(format) | Format::Sequence(format) => {
                 writer.write_data(&format.blob_size)?;
                 writer.write_data(&format.data_fields)?;
                 writer.write_data(&format.ordinal)
@@ -340,12 +398,20 @@ impl Encodable for Format {
                     ordinal: 2,
                 },
             },
+            Format::Sequence(_) => DataHeader {
+                count: 1,
+                format: DataFormat {
+                    blob_size: 2 + 1 + 1,
+                    data_fields: 0,
+                    ordinal: 3,
+                },
+            },
             Format::Fluid => DataHeader {
                 count: 1,
                 format: DataFormat {
                     blob_size: 0,
                     data_fields: 0,
-                    ordinal: 3,
+                    ordinal: 4,
                 },
             },
         };
@@ -360,7 +426,7 @@ impl Decodable for Format {
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let header = Self::ensure_header(header, &[1, 2, 3])?;
+        let header = Self::ensure_header(header)?;
 
         match header.format.ordinal {
             1 => {
@@ -369,25 +435,30 @@ impl Decodable for Format {
                 *self = Format::Blob(size);
             }
 
-            2 => {
+            2 | 3 => {
                 let mut blob_size = 0;
                 reader.read_data_into(&mut blob_size)?;
                 let mut data_fields = 0;
                 reader.read_data_into(&mut data_fields)?;
                 let mut ordinal = 0;
                 reader.read_data_into(&mut ordinal)?;
-                *self = Format::Data(DataFormat {
+                let format = DataFormat {
                     blob_size,
                     data_fields,
                     ordinal,
-                });
+                };
+                *self = if header.format.ordinal == 2 {
+                    Format::Data(format)
+                } else {
+                    Format::Sequence(format)
+                };
             }
 
-            3 => {
+            4 => {
                 *self = Format::Fluid;
             }
 
-            _ => unreachable!(),
+            ordinal => return UnsupportedDataFormatSnafu { ordinal }.fail(),
         }
 
         Ok(())
@@ -532,6 +603,15 @@ pub enum CodecError {
     /// An unsupported data format ordinal was given to a decoder.
     #[snafu(display("unsupported data format (ordinal {ordinal:?})"))]
     UnsupportedDataFormat { ordinal: u8, backtrace: Backtrace },
+
+    /// A header with an unsupported count was given to a decoder
+    /// of a single (non-sequential) data.
+    #[snafu(display("expected to decode a single data, but the header's count was {count}"))]
+    UnsupportedCount { count: u32 },
+
+    /// Text was encoded with bytes that aren't valid UTF-8.
+    #[snafu(display("text contained bytes that aren't valid UTF-8"))]
+    InvalidUtf8,
 
     /// A decoder expected to decode more blob fields' data.
     #[snafu(display("expected to decode {length} more bytes of blob field data"))]
@@ -683,5 +763,49 @@ mod tests {
         let mut bytes = vec![];
         bytes.write_data(&fluid_format).unwrap();
         assert_eq!(fluid_format, bytes.as_slice().read_data().unwrap());
+
+        // Sequences.
+        let sequence_format = data_format.as_sequence();
+        let mut bytes = vec![];
+        bytes.write_data(&sequence_format).unwrap();
+        assert_eq!(sequence_format, bytes.as_slice().read_data().unwrap());
+    }
+
+    #[test]
+    fn as_sequence() {
+        let named = Format::Data(DataFormat {
+            blob_size: 12,
+            data_fields: 3,
+            ordinal: 7,
+        });
+
+        // Blobs and constant-header data are packed.
+        assert_eq!(
+            Format::Sequence(DataFormat {
+                blob_size: 4,
+                data_fields: 0,
+                ordinal: 0
+            }),
+            Format::Blob(4).as_sequence()
+        );
+        assert_eq!(
+            Format::Sequence(named.as_data_format()),
+            named.as_sequence()
+        );
+
+        // Sequences and fluids are prefixed.
+        let prefixed = Format::Sequence(DataFormat {
+            blob_size: 0,
+            data_fields: 1,
+            ordinal: 0,
+        });
+        assert_eq!(prefixed, named.as_sequence().as_sequence());
+        assert_eq!(prefixed, Format::Fluid.as_sequence());
+
+        // Sequences count as a single data field of their parent.
+        assert_eq!(
+            Format::data(1).with(named),
+            Format::data(1).with(named.as_sequence())
+        );
     }
 }

@@ -43,7 +43,6 @@ pub fn generate_types(
 
     // Track the generated struct and variant fragments.
     let mut enum_variants = vec![];
-    let mut enum_variant_ordinals_raw = vec![];
     let mut enum_variant_ordinals = vec![];
     let mut enum_variant_encoders = vec![];
     let mut enum_variant_header_encoders = vec![];
@@ -61,7 +60,6 @@ pub fn generate_types(
         // Validate ordinal.
         let type_ordinal = typing.format().as_data_format().ordinal;
         assert_eq!(expected_ordinal, type_ordinal as usize);
-        enum_variant_ordinals_raw.push(type_ordinal);
 
         // Extract type metadata.
         let type_name = &typing.name;
@@ -231,11 +229,12 @@ pub fn generate_types(
         type_struct += "reader: &mut (impl codas::codec::ReadsDecodable + ?Sized),\n";
         type_struct += "header: Option<codas::codec::DataHeader>,\n";
         type_struct += ") -> core::result::Result<(), codas::codec::CodecError> {\n";
-        type_struct += &format!("let _ = Self::ensure_header(header, &[{type_ordinal}])?;\n");
+        type_struct += "let header = Self::ensure_header(header)?;\n";
+        type_struct += "let mut fields = codas::codec::FieldReader::new(reader, header);\n";
         for (name, _, _, _) in &type_fields {
-            type_struct += &format!("reader.read_data_into(&mut self.{name})?;\n");
+            type_struct += &format!("fields.read(&mut self.{name})?;\n");
         }
-        type_struct += "Ok(())\n";
+        type_struct += "fields.finish()\n";
         type_struct += "}\n";
         type_struct += "}\n";
 
@@ -327,19 +326,20 @@ pub fn generate_types(
     coda_enum += ") -> core::result::Result<(), codas::codec::CodecError> {\n";
 
     // Ensure header.
-    coda_enum += "let header = Self::ensure_header(header, &[\n";
-    for ordinal in enum_variant_ordinals_raw {
-        coda_enum += &format!("{ordinal},");
-    }
-    coda_enum += "])?;\n";
+    coda_enum += "let header = Self::ensure_header(header)?;\n";
 
-    // Decode variants.
+    // Decode variants; unknown ordinals decode as `Unspecified`.
     coda_enum += "match header.format.ordinal {\n";
     for variant in enum_variant_decoders {
         coda_enum += &variant;
         coda_enum += ",\n";
     }
-    coda_enum += "_ => unreachable!(),\n";
+    coda_enum += "_ => {\n";
+    coda_enum += "let mut data = codas::types::Unspecified::default();\n";
+    coda_enum += "data.decode(reader, Some(header))?;\n";
+    coda_enum += "*self = Self::Unspecified(data);\n";
+    coda_enum += "Ok(())\n";
+    coda_enum += "}\n";
     coda_enum += "}\n";
     coda_enum += "}\n";
 

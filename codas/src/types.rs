@@ -12,7 +12,7 @@ use core::convert::Infallible;
 use alloc::{boxed::Box, vec, vec::Vec};
 
 use crate::codec::{
-    CodecError, DataFormat, DataHeader, Decodable, Encodable, Format, ReadsDecodable,
+    CodecError, DataFormat, DataHeader, Decodable, Encodable, FieldReader, Format, ReadsDecodable,
     UnexpectedDataFormatSnafu, WritesEncodable,
 };
 
@@ -182,7 +182,7 @@ impl Type {
                 _ => panic!("array elements must have a fixed size"),
             },
             Type::Data(data) => data.format,
-            Type::List(typing) => typing.format().as_data_format().as_format(),
+            Type::List(typing) => typing.format().as_sequence(),
 
             // Maps are formatted as a list of keys
             // followed by a list of values.
@@ -359,25 +359,12 @@ impl DataType {
             todo!("it should be an error to add fields to a type defined as fluid")
         }
 
-        let field_format = field.typing.format();
-
-        // Optional fields are wrapped into a data field
-        // so they get a header for presence signaling.
-        if field.optional {
-            let boxed_format = Format::data(0).with(field_format);
-            self.format = self.format.with(boxed_format);
-            self.data_fields.push(field);
-        } else {
-            self.format = self.format.with(field_format);
-            match field_format {
-                Format::Blob(..) => {
-                    self.blob_fields.push(field);
-                }
-                Format::Data(..) | Format::Fluid => {
-                    self.data_fields.push(field);
-                }
-            };
-        }
+        let field_format = field.format();
+        self.format = self.format.with(field_format);
+        match field_format {
+            Format::Blob(..) => self.blob_fields.push(field),
+            Format::Data(..) | Format::Sequence(..) | Format::Fluid => self.data_fields.push(field),
+        };
 
         self
     }
@@ -412,6 +399,20 @@ pub struct DataField {
     /// compatibility between coda-defined data and
     /// legacy systems.
     pub flattened: bool,
+}
+
+impl DataField {
+    /// Returns the encoding format of this field: a
+    /// [`Format::as_sequence`] its [`Self::typing`]
+    /// if optional, otherwise its typing.
+    fn format(&self) -> Format {
+        let format = self.typing.format();
+        if self.optional {
+            format.as_sequence()
+        } else {
+            format
+        }
+    }
 }
 
 /// A thing that _might_ contain data with a
@@ -589,7 +590,7 @@ impl Decodable for Type {
 }
 
 impl Encodable for Coda {
-    const FORMAT: crate::codec::Format = Format::data(0)
+    const FORMAT: crate::codec::Format = Format::data(1)
         .with(Text::FORMAT)
         .with(Text::FORMAT)
         .with(Text::FORMAT)
@@ -613,19 +614,18 @@ impl Decodable for Coda {
         reader: &mut (impl crate::codec::ReadsDecodable + ?Sized),
         header: Option<crate::codec::DataHeader>,
     ) -> Result<(), crate::codec::CodecError> {
-        let _ = Self::ensure_header(header, &[0])?;
-
-        reader.read_data_into(&mut self.global_name)?;
-        reader.read_data_into(&mut self.local_name)?;
-        reader.read_data_into(&mut self.docs)?;
-        reader.read_data_into(&mut self.data)?;
-
-        Ok(())
+        let header = Self::ensure_header(header)?;
+        let mut fields = FieldReader::new(reader, header);
+        fields.read(&mut self.global_name)?;
+        fields.read(&mut self.local_name)?;
+        fields.read(&mut self.docs)?;
+        fields.read(&mut self.data)?;
+        fields.finish()
     }
 }
 
 impl Encodable for DataType {
-    const FORMAT: Format = Format::data(0)
+    const FORMAT: Format = Format::data(2)
         .with(Text::FORMAT)
         .with(Option::<Text>::FORMAT)
         .with(Vec::<DataField>::FORMAT)
@@ -648,20 +648,19 @@ impl Decodable for DataType {
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let _ = Self::ensure_header(header, &[0])?;
-
-        reader.read_data_into(&mut self.name)?;
-        reader.read_data_into(&mut self.docs)?;
-        reader.read_data_into(&mut self.blob_fields)?;
-        reader.read_data_into(&mut self.data_fields)?;
-        reader.read_data_into(&mut self.format)?;
-
-        Ok(())
+        let header = Self::ensure_header(header)?;
+        let mut fields = FieldReader::new(reader, header);
+        fields.read(&mut self.name)?;
+        fields.read(&mut self.docs)?;
+        fields.read(&mut self.blob_fields)?;
+        fields.read(&mut self.data_fields)?;
+        fields.read(&mut self.format)?;
+        fields.finish()
     }
 }
 
 impl Encodable for DataField {
-    const FORMAT: Format = Format::data(0)
+    const FORMAT: Format = Format::data(3)
         .with(bool::FORMAT)
         .with(bool::FORMAT)
         .with(Text::FORMAT)
@@ -684,13 +683,14 @@ impl Decodable for DataField {
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let _ = Self::ensure_header(header, &[0])?;
-        reader.read_data_into(&mut self.optional)?;
-        reader.read_data_into(&mut self.flattened)?;
-        reader.read_data_into(&mut self.name)?;
-        reader.read_data_into(&mut self.docs)?;
-        reader.read_data_into(&mut self.typing)?;
-        Ok(())
+        let header = Self::ensure_header(header)?;
+        let mut fields = FieldReader::new(reader, header);
+        fields.read(&mut self.optional)?;
+        fields.read(&mut self.flattened)?;
+        fields.read(&mut self.name)?;
+        fields.read(&mut self.docs)?;
+        fields.read(&mut self.typing)?;
+        fields.finish()
     }
 }
 
@@ -698,12 +698,14 @@ impl<T> Encodable for Option<T>
 where
     T: Default + Encodable + 'static,
 {
-    const FORMAT: Format = Format::data(0).with(T::FORMAT);
+    /// Encoded as a [`Format::as_sequence`] zero
+    /// (`None`, an all-zero header) or one (`Some`) `T`.
+    const FORMAT: Format = T::FORMAT.as_sequence();
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
         match self {
             None => Ok(()),
-            Some(value) => writer.write_data(value),
+            Some(value) => writer.write_sequence_data(value),
         }
     }
 
@@ -750,7 +752,7 @@ where
         }
 
         if h.count == 0 {
-            // For None, the format must be zeroed (no payload).
+            // For None, the format must be zeroed (absent data).
             if h.format != DataFormat::default() {
                 return UnexpectedDataFormatSnafu {
                     expected: Self::FORMAT,
@@ -760,17 +762,9 @@ where
             }
             *self = None;
         } else {
-            // For Some, the format must match the Option wrapper format.
-            if h.format != Self::FORMAT.as_data_format() {
-                return UnexpectedDataFormatSnafu {
-                    expected: Self::FORMAT,
-                    actual: Some(h),
-                }
-                .fail();
-            }
-            let mut value = T::default();
-            reader.read_data_into(&mut value)?;
-            *self = Some(value);
+            let h = Self::ensure_header(Some(h))?;
+            let value = self.get_or_insert_with(T::default);
+            reader.read_next_data_into(h, value)?;
         }
 
         Ok(())
@@ -878,16 +872,15 @@ mod tests {
             reader: &mut (impl ReadsDecodable + ?Sized),
             header: Option<DataHeader>,
         ) -> Result<(), CodecError> {
-            let _ = Self::ensure_header(header, &[1])?;
-
-            reader.read_data_into(&mut self.number)?;
-            reader.read_data_into(&mut self.floaty)?;
-            reader.read_data_into(&mut self.text_list)?;
-            reader.read_data_into(&mut self.text)?;
-            reader.read_data_into(&mut self.nested)?;
-            reader.read_data_into(&mut self.two_d)?;
-
-            Ok(())
+            let header = Self::ensure_header(header)?;
+            let mut fields = FieldReader::new(reader, header);
+            fields.read(&mut self.number)?;
+            fields.read(&mut self.floaty)?;
+            fields.read(&mut self.text_list)?;
+            fields.read(&mut self.text)?;
+            fields.read(&mut self.nested)?;
+            fields.read(&mut self.two_d)?;
+            fields.finish()
         }
     }
 
@@ -939,11 +932,51 @@ mod tests {
             reader: &mut (impl ReadsDecodable + ?Sized),
             header: Option<DataHeader>,
         ) -> Result<(), CodecError> {
-            let _ = Self::ensure_header(header, &[2])?;
+            let header = Self::ensure_header(header)?;
+            let mut fields = FieldReader::new(reader, header);
+            fields.read(&mut self.boolean)?;
+            fields.finish()
+        }
+    }
 
-            reader.read_data_into(&mut self.boolean)?;
+    /// [`NestedTestData`] with fields appended.
+    #[derive(Clone, Debug, Default, PartialEq)]
+    pub struct EvolvedNestedTestData {
+        pub boolean: bool,
+        pub extra_number: u16,
+        pub extra_text: Text,
+        pub extra_optional: Option<u32>,
+    }
 
+    impl Encodable for EvolvedNestedTestData {
+        const FORMAT: Format = Format::data(2)
+            .with(bool::FORMAT)
+            .with(u16::FORMAT)
+            .with(Text::FORMAT)
+            .with(Option::<u32>::FORMAT);
+
+        fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
+            writer.write_data(&self.boolean)?;
+            writer.write_data(&self.extra_number)?;
+            writer.write_data(&self.extra_text)?;
+            writer.write_data(&self.extra_optional)?;
             Ok(())
+        }
+    }
+
+    impl Decodable for EvolvedNestedTestData {
+        fn decode(
+            &mut self,
+            reader: &mut (impl ReadsDecodable + ?Sized),
+            header: Option<DataHeader>,
+        ) -> Result<(), CodecError> {
+            let header = Self::ensure_header(header)?;
+            let mut fields = FieldReader::new(reader, header);
+            fields.read(&mut self.boolean)?;
+            fields.read(&mut self.extra_number)?;
+            fields.read(&mut self.extra_text)?;
+            fields.read(&mut self.extra_optional)?;
+            fields.finish()
         }
     }
 
@@ -956,6 +989,182 @@ mod tests {
         let decoded_data_type = encoded_data_type.as_slice().read_data().unwrap();
 
         assert_eq!(data_type, decoded_data_type);
+    }
+
+    #[test]
+    fn schema_formats_match_runtime_formats() {
+        use alloc::collections::BTreeMap;
+
+        fn check<T: Encodable>(typing: Type) {
+            assert_eq!(T::FORMAT, typing.format(), "{typing:?}");
+        }
+
+        fn check_optional<T: Encodable + Default + 'static>(typing: Type) {
+            let field = DataField {
+                name: Text::from("field"),
+                docs: None,
+                typing: typing.clone(),
+                optional: true,
+                flattened: false,
+            };
+            assert_eq!(Option::<T>::FORMAT, field.format(), "optional {typing:?}");
+        }
+
+        let data = || Type::Data(TestData::typing());
+        let map = || Type::Map((Type::Text, Type::F32).into());
+
+        check::<u8>(Type::U8);
+        check::<u16>(Type::U16);
+        check::<u32>(Type::U32);
+        check::<u64>(Type::U64);
+        check::<i8>(Type::I8);
+        check::<i16>(Type::I16);
+        check::<i32>(Type::I32);
+        check::<i64>(Type::I64);
+        check::<f32>(Type::F32);
+        check::<f64>(Type::F64);
+        check::<bool>(Type::Bool);
+        check::<Text>(Type::Text);
+        check::<Unspecified>(Type::Unspecified);
+        check::<Array<u8, 32>>(Type::Array(32, Type::U8.into()));
+        check::<Array<Array<f32, 3>, 3>>(Type::Array(3, Type::Array(3, Type::F32.into()).into()));
+        check::<TestData>(data());
+        check::<BTreeMap<Text, f32>>(map());
+
+        check::<Vec<u32>>(Type::List(Type::U32.into()));
+        check::<Vec<Text>>(Type::List(Type::Text.into()));
+        check::<Vec<Vec<Text>>>(Type::List(Type::List(Type::Text.into()).into()));
+        check::<Vec<Unspecified>>(Type::List(Type::Unspecified.into()));
+        check::<Vec<Array<f32, 3>>>(Type::List(Type::Array(3, Type::F32.into()).into()));
+        check::<Vec<TestData>>(Type::List(data().into()));
+        check::<Vec<BTreeMap<Text, f32>>>(Type::List(map().into()));
+
+        check_optional::<u32>(Type::U32);
+        check_optional::<Text>(Type::Text);
+        check_optional::<Unspecified>(Type::Unspecified);
+        check_optional::<Array<u8, 48>>(Type::Array(48, Type::U8.into()));
+        check_optional::<TestData>(data());
+        check_optional::<BTreeMap<Text, f32>>(map());
+        check_optional::<Vec<u32>>(Type::List(Type::U32.into()));
+        check_optional::<Vec<TestData>>(Type::List(data().into()));
+    }
+
+    #[test]
+    fn named_data_are_packed() -> Result<(), CodecError> {
+        let list = vec![
+            NestedTestData { boolean: true },
+            NestedTestData { boolean: false },
+            NestedTestData { boolean: true },
+        ];
+
+        let mut encoded = vec![];
+        encoded.write_data(&list)?;
+        assert_eq!(8 + 3, encoded.len(), "one header, then packed data");
+        assert_eq!(
+            [3, 0, 0, 0, 1, 0, 0, 2, 1, 0, 1],
+            encoded.as_slice(),
+            "count=3, blob_size=1, data_fields=0, ordinal=2, then bools"
+        );
+        let decoded: Vec<NestedTestData> = encoded.as_slice().read_data()?;
+        assert_eq!(list, decoded);
+
+        let optional = Some(NestedTestData { boolean: true });
+        let mut encoded = vec![];
+        encoded.write_data(&optional)?;
+        assert_eq!(8 + 1, encoded.len(), "one header, then the packed data");
+        let decoded: Option<NestedTestData> = encoded.as_slice().read_data()?;
+        assert_eq!(optional, decoded);
+
+        // A named data with a count other than 1 can't be
+        // decoded as a single data.
+        let mut encoded = vec![];
+        encoded.write_data(&list)?;
+        assert!(matches!(
+            encoded.as_slice().read_data::<NestedTestData>(),
+            Err(CodecError::UnsupportedCount { count: 3 })
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn evolved_data_decode() -> Result<(), CodecError> {
+        let old = NestedTestData { boolean: true };
+        let new = EvolvedNestedTestData {
+            boolean: true,
+            extra_number: 9001,
+            extra_text: "extra".into(),
+            extra_optional: Some(7),
+        };
+
+        // Newer data decodes into an older type by
+        // skipping the fields the older type doesn't know.
+        let mut encoded = vec![];
+        encoded.write_data(&new)?;
+        encoded.write_data(&42u8)?; // Sentinel after the data.
+        let mut reader = encoded.as_slice();
+        let decoded: NestedTestData = reader.read_data()?;
+        assert_eq!(old, decoded);
+        assert_eq!(42u8, reader.read_data()?, "skipped to the sentinel");
+
+        // Older data decodes into a newer type by
+        // defaulting the fields the older data lacks;
+        // stale values in the reused instance are reset.
+        let mut encoded = vec![];
+        encoded.write_data(&old)?;
+        let mut decoded = new.clone();
+        encoded.as_slice().read_data_into(&mut decoded)?;
+        assert_eq!(
+            EvolvedNestedTestData {
+                boolean: true,
+                ..Default::default()
+            },
+            decoded
+        );
+
+        // The same holds for packed sequences of data.
+        let news = vec![new.clone(), new.clone()];
+        let mut encoded = vec![];
+        encoded.write_data(&news)?;
+        encoded.write_data(&42u8)?;
+        let mut reader = encoded.as_slice();
+        let decoded: Vec<NestedTestData> = reader.read_data()?;
+        assert_eq!(vec![old.clone(), old.clone()], decoded);
+        assert_eq!(42u8, reader.read_data()?, "skipped to the sentinel");
+
+        let olds = vec![old.clone(), old.clone()];
+        let mut encoded = vec![];
+        encoded.write_data(&olds)?;
+        let decoded: Vec<EvolvedNestedTestData> = encoded.as_slice().read_data()?;
+        assert_eq!(
+            vec![
+                EvolvedNestedTestData {
+                    boolean: true,
+                    ..Default::default()
+                };
+                2
+            ],
+            decoded
+        );
+
+        // And for optional data.
+        let mut encoded = vec![];
+        encoded.write_data(&Some(new.clone()))?;
+        let decoded: Option<NestedTestData> = encoded.as_slice().read_data()?;
+        assert_eq!(Some(old), decoded);
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_utf8_is_an_error() {
+        let mut encoded = vec![];
+        encoded.write_data(&Text::from("ok")).unwrap();
+        encoded[8] = 0xFF;
+        assert!(matches!(
+            encoded.as_slice().read_data::<Text>(),
+            Err(CodecError::InvalidUtf8)
+        ));
     }
 
     #[test]
@@ -1022,7 +1231,7 @@ mod tests {
             reader: &mut (impl ReadsDecodable + ?Sized),
             header: Option<DataHeader>,
         ) -> Result<(), CodecError> {
-            let _ = Self::ensure_header(header, &[1])?;
+            let _ = Self::ensure_header(header)?;
             reader.read_data_into(&mut self.id)?;
             reader.read_data_into(&mut self.hash)?;
             reader.read_data_into(&mut self.text)?;
