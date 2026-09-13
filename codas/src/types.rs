@@ -698,8 +698,9 @@ impl<T> Encodable for Option<T>
 where
     T: Default + Encodable + 'static,
 {
-    /// Encoded as a [`Format::as_sequence`] zero
-    /// (`None`, an all-zero header) or one (`Some`) `T`.
+    /// Encoded as a [`Format::as_sequence`] of zero
+    /// (`None`) or one (`Some`) `T`, identically to
+    /// a [`Vec<T>`] of the same length.
     const FORMAT: Format = T::FORMAT.as_sequence();
 
     fn encode(&self, writer: &mut (impl WritesEncodable + ?Sized)) -> Result<(), CodecError> {
@@ -715,11 +716,7 @@ where
     ) -> Result<(), CodecError> {
         DataHeader {
             count: if self.is_some() { 1 } else { 0 },
-            format: if self.is_some() {
-                Self::FORMAT.as_data_format()
-            } else {
-                DataFormat::default()
-            },
+            format: Self::FORMAT.as_data_format(),
         }
         .encode(writer)
     }
@@ -734,37 +731,15 @@ where
         reader: &mut (impl ReadsDecodable + ?Sized),
         header: Option<DataHeader>,
     ) -> Result<(), CodecError> {
-        let h = header.ok_or_else(|| {
-            UnexpectedDataFormatSnafu {
-                expected: Self::FORMAT,
-                actual: None::<DataHeader>,
-            }
-            .build()
-        })?;
+        let header = Self::ensure_header(header)?;
 
-        // Option is always count=0 (None) or count=1 (Some).
-        if h.count > 1 {
-            return UnexpectedDataFormatSnafu {
-                expected: Self::FORMAT,
-                actual: Some(h),
+        match header.count {
+            0 => *self = None,
+            1 => {
+                let value = self.get_or_insert_with(T::default);
+                reader.read_next_data_into(header, value)?;
             }
-            .fail();
-        }
-
-        if h.count == 0 {
-            // For None, the format must be zeroed (absent data).
-            if h.format != DataFormat::default() {
-                return UnexpectedDataFormatSnafu {
-                    expected: Self::FORMAT,
-                    actual: Some(h),
-                }
-                .fail();
-            }
-            *self = None;
-        } else {
-            let h = Self::ensure_header(Some(h))?;
-            let value = self.get_or_insert_with(T::default);
-            reader.read_next_data_into(h, value)?;
+            count => return crate::codec::UnsupportedCountSnafu { count }.fail(),
         }
 
         Ok(())
@@ -1047,6 +1022,46 @@ mod tests {
         check_optional::<BTreeMap<Text, f32>>(map());
         check_optional::<Vec<u32>>(Type::List(Type::U32.into()));
         check_optional::<Vec<TestData>>(Type::List(data().into()));
+    }
+
+    /// Options encode identically to lists
+    /// of zero or one data.
+    #[test]
+    fn options_are_short_lists() -> Result<(), CodecError> {
+        fn check<T>(some: T) -> Result<(), CodecError>
+        where
+            T: Decodable + Default + Clone + PartialEq + core::fmt::Debug + 'static,
+        {
+            for (option, list) in [(None, vec![]), (Some(some.clone()), vec![some])] {
+                let mut option_bytes = vec![];
+                option_bytes.write_data(&option)?;
+                let mut list_bytes = vec![];
+                list_bytes.write_data(&list)?;
+                assert_eq!(option_bytes, list_bytes);
+
+                assert_eq!(option, option_bytes.as_slice().read_data::<Option<T>>()?);
+                assert_eq!(list, list_bytes.as_slice().read_data::<Vec<T>>()?);
+                assert_eq!(list, option_bytes.as_slice().read_data::<Vec<T>>()?);
+                assert_eq!(option, list_bytes.as_slice().read_data::<Option<T>>()?);
+            }
+
+            // Longer lists aren't options.
+            let mut list_bytes = vec![];
+            list_bytes.write_data(&vec![T::default(), T::default()])?;
+            assert!(matches!(
+                list_bytes.as_slice().read_data::<Option<T>>(),
+                Err(CodecError::UnsupportedCount { count: 2 })
+            ));
+
+            Ok(())
+        }
+
+        check(7u32)?;
+        check(Text::from("seven"))?;
+        check(NestedTestData { boolean: true })?;
+        check(vec![7u32])?;
+        check(Some(7u32))?;
+        Ok(())
     }
 
     #[test]

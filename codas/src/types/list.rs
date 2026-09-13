@@ -161,7 +161,8 @@ mod test {
         let decoded: Vec<Text> = encoded.as_slice().read_data().expect("decoded");
         assert_eq!(value, decoded);
 
-        // An all-zero header denotes _absence_, not an empty list.
+        // A header with the wrong format is
+        // rejected, even when it's empty.
         let zeroed = [0u8; 8];
         assert!(zeroed.as_slice().read_data::<Vec<Text>>().is_err());
     }
