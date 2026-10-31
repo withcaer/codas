@@ -7,16 +7,14 @@
 //!
 //! - Hexadecimal (4 bits per character).
 //! - Crockford Base32 (5 bits per character).
+//! - URL-safe Base64 (6 bits per character).
 //!
 //! In general, Hexadecimal is preferable for
 //! debugging (it's a _bit_ more human readable),
-//! while Base32 is preferable for network
-//! transmissions (it's a _bit_ more efficient).
-//!
-//! > _Note_: Base32 is used over Base64 due to
-//! > it's simpler padding-free codec, at the
-//! > cost of reduced efficiency (Base64 encodes
-//! > 6 bits per character).
+//! Base32 is preferable for text people retype
+//! (it's case-insensitive), and Base64 is preferable
+//! for text embedded in other text, like URLs
+//! (it's a _bit_ more efficient).
 use core::fmt::{Debug, Formatter, Write};
 
 use snafu::Snafu;
@@ -412,7 +410,7 @@ pub fn fixed_bytes_from_hex<const SIZE: usize>(
             b'a'..=b'f' => h - b'a' + 10,
             b'A'..=b'F' => h - b'A' + 10,
             character => {
-                return Err(BinaryError::UnexpectedHexCharacter {
+                return Err(BinaryError::UnexpectedCharacter {
                     character: *character,
                 })
             }
@@ -423,7 +421,7 @@ pub fn fixed_bytes_from_hex<const SIZE: usize>(
             b'a'..=b'f' => l - b'a' + 10,
             b'A'..=b'F' => l - b'A' + 10,
             character => {
-                return Err(BinaryError::UnexpectedHexCharacter {
+                return Err(BinaryError::UnexpectedCharacter {
                     character: *character,
                 })
             }
@@ -451,7 +449,7 @@ pub fn bytes_from_hex(hex: &str) -> Result<alloc::vec::Vec<u8>, BinaryError> {
             b'a'..=b'f' => h - b'a' + 10,
             b'A'..=b'F' => h - b'A' + 10,
             character => {
-                return Err(BinaryError::UnexpectedHexCharacter {
+                return Err(BinaryError::UnexpectedCharacter {
                     character: *character,
                 })
             }
@@ -462,7 +460,7 @@ pub fn bytes_from_hex(hex: &str) -> Result<alloc::vec::Vec<u8>, BinaryError> {
             b'a'..=b'f' => l - b'a' + 10,
             b'A'..=b'F' => l - b'A' + 10,
             character => {
-                return Err(BinaryError::UnexpectedHexCharacter {
+                return Err(BinaryError::UnexpectedCharacter {
                     character: *character,
                 })
             }
@@ -543,9 +541,6 @@ pub fn base32_from_bytes(bytes: &[u8]) -> Text {
 ///
 /// Decodes `base32`-encoded text into bytes.
 pub fn base32_to_bytes(base32: Text) -> Result<alloc::vec::Vec<u8>, BinaryError> {
-    if !base32.is_ascii() {
-        todo!()
-    }
     let base32 = base32.as_bytes();
 
     let output_length = base32.len() * BASE32_BITS_PER_CHAR / 8;
@@ -603,7 +598,93 @@ const fn base32_char_index(character: u8) -> Result<u8, BinaryError> {
         c @ b'v'..=b'z' => Ok(c - b'v' + 27),
 
         // Unsupported characters.
-        _ => Err(BinaryError::UnexpectedHexCharacter { character }),
+        _ => Err(BinaryError::UnexpectedCharacter { character }),
+    }
+}
+
+/// ## Unstable
+///
+/// Encodes `bytes` into a new Base64-encoded text.
+///
+/// This implementation (and the corresponding [`decoder`](base64_to_bytes))
+/// uses the URL-safe alphabet of
+/// [RFC 4648, §5](https://www.rfc-editor.org/rfc/rfc4648#section-5),
+/// without padding.
+pub fn base64_from_bytes(bytes: &[u8]) -> Text {
+    let mut base64 = alloc::vec::Vec::with_capacity(bytes.len().div_ceil(3) * 4);
+
+    for chunk in bytes.chunks(3) {
+        // Compress the chunks into a number (24 bits).
+        let mut condensed_chunk: u32 = 0;
+        for i in 0..3 {
+            condensed_chunk = (condensed_chunk << 8) + *chunk.get(i).unwrap_or(&0) as u32;
+        }
+
+        // Push ASCII character codes, `BASE64_BITS_PER_CHAR`-bits
+        // at a time, omitting those which would only encode padding.
+        for i in (3 - chunk.len()..4).rev() {
+            base64.push(
+                BASE64_LUT[((condensed_chunk >> (BASE64_BITS_PER_CHAR * i)) & 0x3F) as usize],
+            );
+        }
+    }
+
+    unsafe { alloc::string::String::from_utf8_unchecked(base64) }.into()
+}
+
+/// ## Unstable
+///
+/// Decodes `base64`-encoded text into bytes.
+pub fn base64_to_bytes(base64: Text) -> Result<alloc::vec::Vec<u8>, BinaryError> {
+    let base64 = base64.as_bytes();
+
+    // A lone trailing character encodes fewer bits than a byte.
+    if base64.len() % 4 == 1 {
+        return Err(BinaryError::UnevenBase64 {
+            actual: base64.len(),
+        });
+    }
+
+    let mut bytes = alloc::vec::Vec::with_capacity(base64.len() * BASE64_BITS_PER_CHAR / 8);
+
+    for chunk in base64.chunks(4) {
+        // Compress the chunks into a number.
+        let mut condensed_chunk: u32 = 0;
+        for i in 0..4 {
+            condensed_chunk = (condensed_chunk << BASE64_BITS_PER_CHAR)
+                + base64_char_index(*chunk.get(i).unwrap_or(&b'A'))? as u32;
+        }
+
+        // Extract bytes from the number, omitting
+        // those decoded from implicit padding.
+        for i in (4 - chunk.len()..3).rev() {
+            bytes.push(((condensed_chunk >> (8 * i)) & 0xFF) as u8);
+        }
+    }
+
+    Ok(bytes)
+}
+
+/// The number of bits encoded by each
+/// character in Base64-encoded text.
+const BASE64_BITS_PER_CHAR: usize = 6;
+
+/// Lookup table for Base64 character codes.
+#[rustfmt::skip]
+static BASE64_LUT: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/// Returns the index in [`BASE64_LUT`]
+/// corresponding to `character`.
+const fn base64_char_index(character: u8) -> Result<u8, BinaryError> {
+    match character {
+        c @ b'A'..=b'Z' => Ok(c - b'A'),
+        c @ b'a'..=b'z' => Ok(c - b'a' + 26),
+        c @ b'0'..=b'9' => Ok(c - b'0' + 52),
+        b'-' => Ok(62),
+        b'_' => Ok(63),
+
+        // Unsupported characters.
+        _ => Err(BinaryError::UnexpectedCharacter { character }),
     }
 }
 
@@ -619,8 +700,13 @@ pub enum BinaryError {
     ))]
     WrongHexLength { expected: usize, actual: usize },
 
-    #[snafu(display("hexadecimal string contained an unexpected character code: {character}"))]
-    UnexpectedHexCharacter { character: u8 },
+    #[snafu(display("string contained an unexpected character code: {character}"))]
+    UnexpectedCharacter { character: u8 },
+
+    #[snafu(display(
+        "expected a base64 string containing a multiple of four bytes, not {actual} byte(s)"
+    ))]
+    UnevenBase64 { actual: usize },
 }
 
 #[cfg(test)]
@@ -798,5 +884,39 @@ mod test {
                 .as_slice()
             )
         );
+
+        // Characters outside the alphabet are errors.
+        assert!(base32_to_bytes("Z0Z0Z0Z0".into()).is_ok());
+        assert!(base32_to_bytes("Z0Z0Z0ZU".into()).is_err());
+        assert!(base32_to_bytes("Z0Z0Z0Zé".into()).is_err());
+    }
+
+    #[test]
+    fn test_base64() {
+        // Test vectors from RFC 4648, §10, without padding.
+        for (bytes, base64) in [
+            ("", ""),
+            ("f", "Zg"),
+            ("fo", "Zm8"),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg"),
+            ("fooba", "Zm9vYmE"),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64, base64_from_bytes(bytes.as_bytes()));
+            assert_eq!(bytes.as_bytes(), base64_to_bytes(base64.into()).unwrap());
+        }
+
+        // The URL-safe alphabet replaces `+` and `/`.
+        assert_eq!("-_-_", base64_from_bytes(&[0xFB, 0xFF, 0xBF]));
+        assert_eq!(
+            vec![0xFB, 0xFF, 0xBF],
+            base64_to_bytes("-_-_".into()).unwrap()
+        );
+        assert!(base64_to_bytes("+/+/".into()).is_err());
+
+        // A lone trailing character encodes nothing.
+        assert!(base64_to_bytes("Zm9vY".into()).is_err());
+        assert!(base64_to_bytes("é".into()).is_err());
     }
 }
