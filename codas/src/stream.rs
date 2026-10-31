@@ -3,6 +3,9 @@
 //! and `std::io::Write` on platforms supporting them.
 use snafu::Snafu;
 
+mod packed;
+pub use packed::*;
+
 /// A thing that reads from a stream of bytes.
 pub trait Reads {
     /// Reads bytes into `buf`, returning the number
