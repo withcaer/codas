@@ -94,6 +94,22 @@ The _order_ of `Data` and their fields (`+`) matters: If
 data or fields are re-arranged, the binary encoding of that
 data may also change.
 
+A coda can use data types from other codas by listing
+them (`+ uses [alias](path)`) between its header and its first data, and  referring to their data types as `alias.TypeName`:
+
+```markdown
+# `Chat` Coda
+
++ uses [`greeter`](greeter.md)
+
+## `Message` Data
+
++ `request` greeter.Request
+```
+
+The path is relative to the coda's own file. Data types from
+used codas can be used as field types within the "using" coda.
+
 ## How do I use a Coda?
 
 The easiest way to get started with Codas is with Rust via

@@ -17,14 +17,20 @@ pub fn execute_compile_command(command: CompileCommand) {
 }
 
 /// Compile a single coda and write the output to stdout.
+///
+/// Codas read from stdin cannot use other codas.
 fn pipe_mode(source: Option<PathBuf>, lang: Lang) {
-    let mut input = open_file_or_stdin(source).expect("source doesn't exist");
-    let mut markdown = String::new();
-    input
-        .read_to_string(&mut markdown)
-        .expect("failed to read source");
-
-    let coda = parse::parse(&markdown).expect("failed to parse coda");
+    let coda = match source {
+        Some(path) => parse::load(&path).expect("failed to parse coda").0,
+        None => {
+            let mut input = open_file_or_stdin(None).expect("source doesn't exist");
+            let mut markdown = String::new();
+            input
+                .read_to_string(&mut markdown)
+                .expect("failed to read source");
+            parse::parse(&markdown).expect("failed to parse coda")
+        }
+    };
     let mut stdout = std::io::stdout().lock();
 
     generate(&coda, lang, &mut stdout);
@@ -106,12 +112,7 @@ fn collect_md_files(dir: &Path, codas: &mut Vec<(PathBuf, Coda)>) {
         if path.is_dir() {
             collect_md_files(&path, codas);
         } else if path.extension().is_some_and(|ext| ext == "md") {
-            let markdown = match fs::read_to_string(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            if let Ok(coda) = parse::parse(&markdown) {
+            if let Ok((coda, _)) = parse::load(&path) {
                 codas.push((path, coda));
             }
         }

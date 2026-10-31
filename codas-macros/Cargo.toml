@@ -32,7 +32,7 @@ serde = []
 proc-macro = true
 
 [dependencies]
-codas = { workspace = true, features = ["parse", "langs-rust"] }
+codas = { workspace = true, features = ["std", "parse", "langs-rust"] }
 
 [dev-dependencies]
 codas = { path = "../codas", features = ["serde"] }

@@ -7,7 +7,7 @@
 //! the exact APIs are subject to change, and may
 //! not be well-optimized.
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, format};
 use core::{iter::Peekable, ops::Range};
 
 use logos::{Lexer, Logos};
@@ -16,10 +16,15 @@ use token::Token;
 
 use crate::{
     codec::Format,
-    types::{Coda, DataField, DataType, Text, Type},
+    types::{Coda, DataField, DataType, Text, Type, Use},
 };
 
+#[cfg(feature = "std")]
+mod load;
 mod token;
+
+#[cfg(feature = "std")]
+pub use load::load;
 
 /// Maximum user-defined ordinal value.
 ///
@@ -27,7 +32,21 @@ mod token;
 const MAX_USER_ORDINAL: u8 = 240;
 
 /// Parses `markdown` into a [`Coda`].
+///
+/// Codas that use other codas must be parsed
+/// with [`parse_with`] (or [`load`], with `std`).
 pub fn parse(markdown: &str) -> Result<Coda, ParseError> {
+    parse_with(markdown, |path| {
+        Err(ParseError::UnresolvedUse { path: path.into() })
+    })
+}
+
+/// Parses `markdown` into a [`Coda`], calling `resolve`
+/// with the path of each coda it uses to obtain that coda.
+pub fn parse_with(
+    markdown: &str,
+    mut resolve: impl FnMut(&str) -> Result<Coda, ParseError>,
+) -> Result<Coda, ParseError> {
     // Parse the raw coda from the markdown.
     let markdown = markdown.trim();
     let mut parser = Parser::new(markdown);
@@ -40,6 +59,19 @@ pub fn parse(markdown: &str) -> Result<Coda, ParseError> {
         Some(markdown[parsed_coda.docs].trim().into())
     };
     let mut coda = Coda::new(parsed_coda.global_name, parsed_coda.local_name, docs, &[]);
+
+    // Resolve used codas.
+    for (alias, path) in parsed_coda.uses {
+        if coda
+            .uses
+            .iter()
+            .any(|u| u.alias.eq_ignore_ascii_case(&alias))
+        {
+            return Err(ParseError::DuplicateUse { alias });
+        }
+        let used = resolve(&path)?;
+        coda.uses.push(Use { alias, coda: used });
+    }
 
     // Create data types.
     for (ordinal, parsed_data) in parsed_coda.data.into_iter().enumerate() {
@@ -102,6 +134,25 @@ pub fn parse(markdown: &str) -> Result<Coda, ParseError> {
 /// using `coda` to resolve type names.
 fn resolve_field_type(coda: &Coda, typing: ParsedFieldType) -> Result<Type, ParseError> {
     match typing {
+        // A type from a used coda, qualified as `alias.TypeName`.
+        ParsedFieldType::Scalar(name) if name.contains('.') => {
+            let (alias, type_name) = name.split_once('.').unwrap();
+            let used = coda
+                .uses
+                .iter()
+                .find(|u| u.alias.eq_ignore_ascii_case(alias))
+                .ok_or_else(|| ParseError::UnknownUse {
+                    alias: alias.into(),
+                })?;
+            match used.coda.type_from_name(type_name) {
+                Some(Type::Data(mut data)) => {
+                    data.name = format!("{}.{}", used.alias, data.name).into();
+                    Ok(Type::Data(data))
+                }
+                _ => Err(ParseError::UnknownType { name }),
+            }
+        }
+
         ParsedFieldType::Scalar(name) => Ok(match coda.type_from_name(&name) {
             Some(typing) => typing,
             None => Type::Data(DataType::new_fluid(name, None)),
@@ -174,6 +225,7 @@ impl<'lexer> Parser<'lexer> {
             global_name: name.0.into(),
             local_name: name.1.into(),
             docs: 0..0,
+            uses: alloc::vec![],
             data: alloc::vec![],
         };
 
@@ -185,12 +237,40 @@ impl<'lexer> Parser<'lexer> {
         }
         coda.docs = docs;
 
+        // Parse uses, which must precede all data types.
+        while let Some(uses) = self.take_uses()? {
+            coda.uses.push(uses);
+        }
+
         // Parse data types.
         while let Some(data_type) = self.take_data()? {
             coda.data.push(data_type);
         }
 
+        // Uses after data types are a mistake.
+        if let Some(Ok(Token::Uses(..))) = self.lexer.peek() {
+            return Err(ParseError::UnexpectedUse);
+        }
+
         Ok(Some(coda))
+    }
+
+    /// Takes the next [`Token::Uses`], skipping blank lines.
+    fn take_uses(&mut self) -> Result<Option<(Text, Text)>, ParseError> {
+        loop {
+            match self.lexer.peek() {
+                Some(Ok(Token::Uses((alias, path)))) => {
+                    let uses = ((*alias).into(), (*path).into());
+                    self.lexer.next();
+                    return Ok(Some(uses));
+                }
+                Some(Ok(Token::DocsLine((line, ..)))) if line.trim().is_empty() => {
+                    self.lexer.next();
+                }
+                None | Some(Ok(..)) => return Ok(None),
+                _ => return Err(ParseError::UnexpectedError),
+            }
+        }
     }
 
     /// Takes the next [`Token::Data`].
@@ -294,6 +374,10 @@ struct ParsedCoda {
     global_name: Text,
     local_name: Text,
     docs: Range<usize>,
+
+    /// The `(alias, path)` of each used coda.
+    uses: alloc::vec::Vec<(Text, Text)>,
+
     data: alloc::vec::Vec<ParsedDataType>,
 }
 
@@ -378,6 +462,28 @@ pub enum ParseError {
 
     #[snafu(display("The combined size of `{data}`'s fixed-size fields exceeds 65535 bytes."))]
     BlobSectionOverflow { data: Text },
+
+    #[snafu(display("The coda at `{path}` could not be resolved."))]
+    UnresolvedUse { path: Text },
+
+    #[snafu(display("The coda at `{path}` uses itself, directly or indirectly."))]
+    CyclicUse { path: Text },
+
+    #[snafu(display("The alias `{alias}` is used more than once."))]
+    DuplicateUse { alias: Text },
+
+    #[snafu(display("`uses` statements must precede all data types."))]
+    UnexpectedUse,
+
+    #[snafu(display("No used coda has the alias `{alias}`."))]
+    UnknownUse { alias: Text },
+
+    #[snafu(display("No data type is named `{name}`."))]
+    UnknownType { name: Text },
+
+    #[cfg(feature = "std")]
+    #[snafu(display("The coda at `{path}` could not be read: {reason}"))]
+    Io { path: Text, reason: Text },
 
     #[snafu(display("An unexpected error occurred while parsing the source text."))]
     UnexpectedError,
@@ -792,6 +898,67 @@ An example Markdown Data Type.
             }),
             *coda.data[0].format()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parses_uses() -> Result<(), ParseError> {
+        const USED: &str = "# `Geo` Coda\n\n## `Point` Data\n\n+ `x` f32\n+ `y` f32";
+        const USER: &str = r#"
+# `App` Coda
+
++ uses [`geo`](geo.md)
+
+## `Pin` Data
+
++ `at` geo.Point
++ `trail` list of [`Geo.point`](geo.md#point-data)
+"#;
+
+        let coda = parse_with(USER, |path| {
+            assert_eq!("geo.md", path);
+            parse(USED)
+        })?;
+
+        // The used coda is retained under its alias.
+        assert_eq!(1, coda.uses.len());
+        assert_eq!("geo", coda.uses[0].alias);
+        assert_eq!(parse(USED)?, coda.uses[0].coda);
+
+        // Used types keep their own ordinal and are named by alias.
+        let mut point = coda.uses[0].coda.data[0].clone();
+        point.name = "geo.Point".into();
+        let pin = &coda.data[0];
+        assert_eq!(1, pin.format().as_data_format().ordinal);
+        let fields: Vec<_> = pin.iter().collect();
+        assert_eq!(Type::Data(point.clone()), fields[0].typing);
+        assert_eq!(Type::List(Type::Data(point).into()), fields[1].typing);
+
+        // Uses must be resolved.
+        assert!(matches!(
+            parse(USER),
+            Err(ParseError::UnresolvedUse { path }) if path == "geo.md"
+        ));
+
+        // Qualified names must resolve.
+        let bad_alias = USER.replace("geo.Point", "gis.Point");
+        assert!(matches!(
+            parse_with(&bad_alias, |_| parse(USED)),
+            Err(ParseError::UnknownUse { alias }) if alias == "gis"
+        ));
+        let bad_type = USER.replace("geo.Point", "geo.Line");
+        assert!(matches!(
+            parse_with(&bad_type, |_| parse(USED)),
+            Err(ParseError::UnknownType { name }) if name == "geo.Line"
+        ));
+
+        // Uses must precede data types.
+        let late_use = USER.replace("+ uses [`geo`](geo.md)", "") + "\n+ uses [`geo`](geo.md)";
+        assert!(matches!(
+            parse_with(&late_use, |_| parse(USED)),
+            Err(ParseError::UnexpectedUse)
+        ));
 
         Ok(())
     }

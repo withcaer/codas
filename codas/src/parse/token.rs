@@ -100,6 +100,27 @@ pub enum Token<'a> {
     })]
     Data(&'a str),
 
+    /// ``+ uses [`alias`](path/to/coda.md)``
+    ///
+    /// This token declares that the coda uses
+    /// (imports) another coda, whose data types
+    /// are referenced in fields as `alias.TypeName`.
+    ///
+    /// Each tuple contains the alias followed by
+    /// the path of the used coda.
+    #[regex(r"(?&linebreak)\+(?&space)(?i)uses(?&space)\[`(?&data_id)`\]\([^)\r\n]*\)", |lex| {
+        let slice = lex.slice();
+
+        // Slice contains: + uses [`alias`](path)
+        let alias_start = slice.find("[`").unwrap() + 2;
+        let alias_end = alias_start + slice[alias_start..].find('`').unwrap();
+        let path_start = alias_end + slice[alias_end..].find('(').unwrap() + 1;
+        let path_end = slice.len() - 1;
+
+        (&slice[alias_start..alias_end], slice[path_start..path_end].trim())
+    })]
+    Uses((&'a str, &'a str)),
+
     /// ``+ `the_field_name` optional [N]d list of TheDataType``
     ///
     /// This token marks the beginning of a field in
@@ -153,6 +174,7 @@ pub enum Token<'a> {
 #[logos(subpattern space = r"[^\S\r\n]")]
 #[logos(subpattern linebreak = r"[\r\n|\r|\n]+")]
 #[logos(subpattern data_id = r"[a-zA-Z0-9_-]+")]
+#[logos(subpattern type_id = r"[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)?")]
 #[logos(subpattern field_id = r"[a-zA-Z0-9_-]+")]
 pub enum DataFieldToken<'a> {
     /// This token marks the beginning of a data
@@ -231,8 +253,9 @@ pub enum DataFieldToken<'a> {
     Map,
 
     /// This token contains the fully-qualified
-    /// type of a field.
-    #[regex(r"(?i)(to(?&space))?\[`(?&data_id)`\]\([^)]*\)", |lex| {
+    /// type of a field, optionally prefixed with
+    /// the alias of a used coda (`alias.TypeName`).
+    #[regex(r"(?i)(to(?&space))?\[`(?&type_id)`\]\([^)]*\)", |lex| {
         let slice = lex.slice();
 
         // Strip off any leading `to `.
@@ -246,7 +269,7 @@ pub enum DataFieldToken<'a> {
         let end = slice.find('`').unwrap();
         &slice[..end]
     })]
-    #[regex(r"(?i)(to(?&space))?(?&data_id)", |lex| {
+    #[regex(r"(?i)(to(?&space))?(?&type_id)", |lex| {
         let slice = lex.slice();
 
         // Strip off any leading `to `.

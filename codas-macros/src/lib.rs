@@ -29,9 +29,8 @@ pub fn export_coda(tokens: TokenStream) -> TokenStream {
     // Locate the coda relative to the workspace root.
     let path = workspace_root.join(coda_path);
 
-    // Load and parse the coda from the file.
-    let coda = std::fs::read_to_string(path.clone()).unwrap();
-    let coda = codas::parse::parse(&coda).unwrap();
+    // Load and parse the coda (and any codas it uses) from the file.
+    let (coda, sources) = codas::parse::load(&path).unwrap();
 
     // Generate Rust code.
     let mut codegen = vec![];
@@ -45,15 +44,18 @@ pub fn export_coda(tokens: TokenStream) -> TokenStream {
     }
     let codegen = String::from_utf8_lossy(&codegen);
 
-    // Prepend the generated code with a statement
+    // Prepend the generated code with statements
     // that will trigger a rebuild of the code whenever
-    // the source file changes.
-    let mut codegen_prefix = format!(
-        r#"
-        const _: &str = include_str!("{}");
-    "#,
-        path.display()
-    );
+    // any source file changes.
+    let mut codegen_prefix = String::new();
+    for source in sources {
+        codegen_prefix += &format!(
+            r#"
+            const _: &str = include_str!("{}");
+        "#,
+            source.canonicalize().unwrap().display()
+        );
+    }
     codegen_prefix += &codegen;
 
     codegen_prefix.parse().unwrap()

@@ -231,6 +231,12 @@ pub struct Coda {
 
     pub docs: Option<Text>,
 
+    /// Codas whose data types are used by this coda's fields.
+    ///
+    /// Uses are _not_ encoded with the coda: fields
+    /// referencing used data types embed those types.
+    pub uses: Vec<Use>,
+
     /// Data in ascending order by ordinal.
     pub(crate) data: Vec<DataType>,
 }
@@ -242,6 +248,7 @@ impl Coda {
             global_name,
             local_name,
             docs,
+            uses: Vec::new(),
             data: Vec::from(data),
         }
     }
@@ -266,6 +273,23 @@ impl Coda {
 
         Type::from_name(name)
     }
+}
+
+/// A coda used by another coda.
+///
+/// Data types of the used coda are referenced
+/// by fields as `alias.TypeName`, and are named
+/// the same way in the referencing [`DataType`].
+/// Ordinals of used data types are scoped to the
+/// coda that defines them; used data types are
+/// _only_ valid as field types.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Use {
+    /// The alias by which the coda is referenced.
+    pub alias: Text,
+
+    /// The used coda.
+    pub coda: Coda,
 }
 
 /// Data containing a structured set of [`DataField`]s.

@@ -10,6 +10,32 @@ use serde_json::json;
 
 export_coda!("codas-macros/tests/full_coda.md");
 export_coda!("codas-macros/tests/greeter_coda.md");
+export_coda!("codas-macros/tests/chat_coda.md");
+
+/// Data types from used codas are generated in a
+/// submodule named by alias, and keep their own ordinals.
+#[test]
+pub fn generated_used_types() {
+    use codas::codec::{Encodable, ReadsDecodable, WritesEncodable};
+
+    let thread = Thread {
+        title: "Hi".into(),
+        requests: vec![greeter::Request {
+            message: "Hello".into(),
+        }],
+        latest: None,
+    };
+    assert_eq!(
+        greeter::GreeterData::from(greeter::Request::default()).ordinal(),
+        greeter::Request::FORMAT.as_data_format().ordinal
+    );
+
+    let mut bytes = vec![];
+    bytes.write_data(&thread).unwrap();
+    let mut decoded = Thread::default();
+    bytes.as_slice().read_data_into(&mut decoded).unwrap();
+    assert_eq!(thread, decoded);
+}
 
 /// If this test _compiles_, all data
 /// types were generated correctly by

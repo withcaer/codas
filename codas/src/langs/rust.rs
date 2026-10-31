@@ -355,6 +355,15 @@ pub fn generate_types(
     // Generate final code from the enum.
     let mut codegen = coda_enum;
 
+    // Add used codas as submodules named by alias.
+    for used in &coda.uses {
+        let mut submodule = vec![];
+        generate_types(&used.coda, &mut submodule, with_serde)?;
+        codegen += &format!("pub mod {} {{\n", used.alias);
+        codegen += &String::from_utf8_lossy(&submodule);
+        codegen += "}\n";
+    }
+
     // Add type structs to the output.
     for variant in type_structs {
         codegen += &variant;
@@ -394,7 +403,8 @@ fn get_rust_type(typing: &Type) -> Text {
             let elem = get_rust_type(elem.as_ref());
             format!("codas::types::Array<{elem}, {count}>").into()
         }
-        Type::Data(typing) => typing.name.clone(),
+        // Used types are named `alias.TypeName`.
+        Type::Data(typing) => typing.name.replace('.', "::").into(),
         Type::List(typing) => {
             let typing = get_rust_type(typing.as_ref());
             format!("alloc::vec::Vec<{typing}>").into()
